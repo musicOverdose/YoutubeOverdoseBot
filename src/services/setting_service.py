@@ -382,11 +382,11 @@ class SettingService:
     LOCAL_API_POLL_INTERVAL: float = 1.0
 
     @staticmethod
-    def derive_endpoint(mode: str) -> str:
+    def derive_endpoint(mode: str, base_url: Optional[str] = None) -> str:
         if mode == "cloud":
             return "https://api.telegram.org"
-        base = settings.TELEGRAM_API_BASE_URL.rstrip("/")
-        if not base or "api.telegram.org" in base:
+        base = (base_url or getattr(settings, "TELEGRAM_API_BASE_URL", "") or "").rstrip("/")
+        if not base or base == "https://api.telegram.org":
             return "http://telegram-bot-api:8081"
         return base
 
@@ -418,7 +418,7 @@ class SettingService:
             except Exception:
                 pass
 
-        return getattr(settings, "TELEGRAM_API_MODE", "local")
+        return getattr(settings, "TELEGRAM_API_MODE", "cloud")
 
     # --------------------------------------------------------------------------
     # Database Settings Retrieval
@@ -512,9 +512,7 @@ class SettingService:
         """Return sanitized Telegram configuration for Web Admin."""
         all_active = await cls.get_all_active(session)
         bot_token = all_active.get(SETTING_BOT_TOKEN)
-        api_id = all_active.get(SETTING_API_ID)
-        api_hash = all_active.get(SETTING_API_HASH)
-        mode = all_active.get(SETTING_API_MODE) or "local"
+        mode = all_active.get(SETTING_API_MODE) or getattr(settings, "TELEGRAM_API_MODE", "cloud")
         cache_channel_id = all_active.get(SETTING_CACHE_CHANNEL_ID)
         version_str = all_active.get(SETTING_CONFIG_VERSION) or "1"
 
@@ -524,9 +522,6 @@ class SettingService:
             "is_configured": bool(bot_token),
             "bot_token_masked": mask_secret(bot_token),
             "has_bot_token": bool(bot_token),
-            "api_id": int(api_id) if (api_id and api_id.isdigit()) else None,
-            "api_hash_masked": mask_secret(api_hash),
-            "has_api_hash": bool(api_hash),
             "cache_channel_id": int(cache_channel_id) if (cache_channel_id and (cache_channel_id.isdigit() or cache_channel_id.startswith("-"))) else None,
             "config_version": int(version_str) if version_str.isdigit() else 1,
         }
@@ -704,8 +699,7 @@ class SettingService:
     ) -> Dict[str, Any]:
         """
         Staged, atomic Telegram configuration mutation protected by pg_try_advisory_lock.
-        Distinguishes between Local Bot API mutations (Design B: RECONCILING state, unlink READY first)
-        and Ordinary Mutations (ACTIVE remains operational during validation).
+        The bot connects as a pure client to either Cloud Bot API or Centralized Local Bot API.
         """
         candidate_mode = candidate_mode.lower().strip()
         if candidate_mode not in ("local", "cloud"):
@@ -734,16 +728,6 @@ class SettingService:
                 if SETTING_BOT_TOKEN in active_items
                 else None
             )
-            existing_api_id = (
-                active_items[SETTING_API_ID].value
-                if SETTING_API_ID in active_items
-                else None
-            )
-            existing_api_hash = (
-                (decrypt_credential(active_items[SETTING_API_HASH].value, master_key) if active_items[SETTING_API_HASH].is_encrypted else active_items[SETTING_API_HASH].value)
-                if SETTING_API_HASH in active_items
-                else None
-            )
             existing_channel_id = (
                 active_items[SETTING_CACHE_CHANNEL_ID].value
                 if SETTING_CACHE_CHANNEL_ID in active_items
@@ -756,15 +740,6 @@ class SettingService:
                 raise HTTPException(status_code=400, detail="Bot API Token is required.")
             if not re.match(r"^\d+:[\w-]{20,}$", target_token):
                 raise HTTPException(status_code=400, detail="Invalid Telegram Bot Token format.")
-
-            target_api_id = str(api_id).strip() if api_id else existing_api_id
-            target_api_hash = api_hash.strip() if api_hash and api_hash.strip() else existing_api_hash
-
-            if candidate_mode == "local":
-                if not target_api_id or not str(target_api_id).isdigit():
-                    raise HTTPException(status_code=400, detail="Telegram API ID (numeric) is required in Local mode.")
-                if not target_api_hash or not re.match(r"^[a-fA-F0-9]{32}$", target_api_hash):
-                    raise HTTPException(status_code=400, detail="Telegram API Hash (32 hex characters) is required in Local mode.")
 
             target_channel = str(cache_channel_id).strip() if cache_channel_id is not None else existing_channel_id
 
@@ -791,26 +766,6 @@ class SettingService:
                             description="Telegram Bot API Mode (local or cloud)",
                         ),
                     ]
-                    if target_api_id:
-                        pending_records.append(
-                            Setting(
-                                key=SETTING_API_ID,
-                                status="PENDING",
-                                value=str(target_api_id),
-                                is_encrypted=False,
-                                description="Telegram API ID",
-                            )
-                        )
-                    if target_api_hash:
-                        pending_records.append(
-                            Setting(
-                                key=SETTING_API_HASH,
-                                status="PENDING",
-                                value=encrypt_credential(target_api_hash, master_key),
-                                is_encrypted=True,
-                                description="Encrypted Telegram API Hash",
-                            )
-                        )
                     if target_channel:
                         pending_records.append(
                             Setting(
@@ -825,15 +780,6 @@ class SettingService:
                     session.add_all(pending_records)
                     await session.flush()
 
-            # Determine whether this mutation alters the live Local Bot API runtime
-            is_local_api_mutation = (
-                candidate_mode == "local"
-                and (
-                    (target_api_id != existing_api_id)
-                    or (target_api_hash != existing_api_hash)
-                )
-            )
-
             validation_passed = False
             validation_error = ""
             bot_info = None
@@ -842,129 +788,48 @@ class SettingService:
             # ------------------------------------------------------------------
             # Candidate Validation Execution
             # ------------------------------------------------------------------
-            if is_local_api_mutation:
-                # DESIGN B: Local Bot API runtime must be cycled to test candidate credentials.
-                # Unlink READY FIRST to halt consumers while production runtime mutates.
-                remove_runtime_ready()
-
-                try:
-                    write_local_bot_api_env(target_api_id, target_api_hash)
-                    write_restart_trigger()
-
-                    # Bounded readiness polling (up to 20s) over TCP and getMe probe
+            try:
+                if candidate_mode == "local":
                     ready_ok, bot_info, err = await cls.poll_local_api_readiness(
                         target_token, target_endpoint
                     )
                     if not ready_ok:
                         raise ValueError(err)
+                else:
+                    get_me_ok, bot_info, err = await cls.probe_get_me(target_token, target_endpoint)
+                    if not get_me_ok:
+                        raise ValueError(f"Bot API getMe probe failed: {err}")
 
-                    if target_channel:
-                        try:
-                            cid = int(target_channel)
-                            chan_ok, chan_err = await cls.probe_cache_channel(
-                                target_token, target_endpoint, cid, bot_id=bot_info.get("id")
-                            )
-                            if not chan_ok:
-                                raise ValueError(f"Cache channel validation failed: {chan_err}")
-                        except ValueError as ve:
-                            raise ValueError(f"Invalid cache channel: {ve}")
-
-                    validation_passed = True
-
-                except Exception as ex:
-                    validation_passed = False
-                    validation_error = str(ex)
-                    logger.error("Local Bot API candidate validation failed: %s", validation_error)
-
-                    # Rollback Local Bot API runtime to existing ACTIVE credentials if present
-                    if existing_api_id and existing_api_hash and existing_token:
-                        try:
-                            logger.info("Restoring previous ACTIVE local-bot-api.env and triggering restart...")
-                            write_local_bot_api_env(existing_api_id, existing_api_hash)
-                            write_restart_trigger()
-
-                            # CRITICAL Correction 3: Rollback must also wait for Local Bot API readiness
-                            rb_ok, rb_info, rb_err = await cls.poll_local_api_readiness(
-                                existing_token, target_endpoint
-                            )
-                            if rb_ok and verify_runtime_artifacts(mode="local"):
-                                write_runtime_ready()
-                                logger.info("Previous ACTIVE configuration successfully verified and restored. READY re-armed.")
-                            else:
-                                logger.error(
-                                    "Failed to verify restored Local Bot API runtime: %s. Leaving READY absent (system halted).",
-                                    rb_err,
-                                )
-                                remove_runtime_ready()
-                        except Exception as r_err:
-                            logger.error(
-                                "Exception during rollback of Local Bot API runtime: %s. Leaving READY absent (system halted).",
-                                r_err,
-                            )
-                            remove_runtime_ready()
-                    else:
-                        # Clean up failed candidate runtime artifacts on fresh installations (no previous ACTIVE configuration)
-                        logger.info("Fresh installation candidate validation failed. Purging candidate runtime artifacts...")
-                        remove_runtime_ready()
-                        remove_runtime_bot_token()
-                        remove_local_bot_api_artifacts()
-
-                    # Delete PENDING from PostgreSQL
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            await session.execute(delete(Setting).where(Setting.status == "PENDING"))
-
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Candidate Telegram configuration rejected: {validation_error}. System rolled back to previous configuration.",
-                    )
-
-            else:
-                # ORDINARY MUTATION: Token rotation, cache channel ID, or Cloud mode.
-                # Live runtime is NOT modified during candidate validation.
-                # ACTIVE remains operational and READY remains present.
-                try:
-                    if candidate_mode == "local":
-                        ready_ok, bot_info, err = await cls.poll_local_api_readiness(
-                            target_token, target_endpoint
+                if target_channel:
+                    try:
+                        cid = int(target_channel)
+                        chan_ok, chan_err = await cls.probe_cache_channel(
+                            target_token, target_endpoint, cid, bot_id=bot_info.get("id")
                         )
-                        if not ready_ok:
-                            raise ValueError(err)
-                    else:
-                        get_me_ok, bot_info, err = await cls.probe_get_me(target_token, target_endpoint)
-                        if not get_me_ok:
-                            raise ValueError(f"Bot API getMe probe failed: {err}")
+                        if not chan_ok:
+                            raise ValueError(f"Cache channel validation failed: {chan_err}")
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid cache channel: {ve}")
 
-                    if target_channel:
-                        try:
-                            cid = int(target_channel)
-                            chan_ok, chan_err = await cls.probe_cache_channel(
-                                target_token, target_endpoint, cid, bot_id=bot_info.get("id")
-                            )
-                            if not chan_ok:
-                                raise ValueError(f"Cache channel validation failed: {chan_err}")
-                        except ValueError as ve:
-                            raise ValueError(f"Invalid cache channel: {ve}")
+                validation_passed = True
 
-                    validation_passed = True
+            except Exception as ex:
+                validation_passed = False
+                validation_error = str(ex)
+                logger.error("Telegram candidate validation failed: %s", validation_error)
 
-                except Exception as ex:
-                    validation_passed = False
-                    validation_error = str(ex)
-                    logger.error("Ordinary Telegram candidate validation failed: %s", validation_error)
+                # Delete PENDING from PostgreSQL
+                async with conn.begin():
+                    async with AsyncSession(bind=conn, expire_on_commit=False) as session:
+                        await session.execute(delete(Setting).where(Setting.status == "PENDING"))
 
-                    # Delete PENDING from PostgreSQL
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            await session.execute(delete(Setting).where(Setting.status == "PENDING"))
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Candidate Telegram configuration rejected: {validation_error}. Active configuration remains unchanged.",
+                )
 
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Candidate Telegram configuration rejected: {validation_error}. Active configuration remains unchanged.",
-                    )
-
-                # Validation succeeded for ordinary mutation: UNLINK READY FIRST before TX2
-                remove_runtime_ready()
+            # Unlink READY before TX2
+            remove_runtime_ready()
 
             # ------------------------------------------------------------------
             # Short Transaction 2: Promote PENDING to ACTIVE
@@ -1010,8 +875,6 @@ class SettingService:
             # Reconstruct Runtime Artifacts & Recreate READY
             # ------------------------------------------------------------------
             write_runtime_bot_token(target_token)
-            if candidate_mode == "local" and target_api_id and target_api_hash:
-                write_local_bot_api_env(target_api_id, target_api_hash)
 
             if not verify_runtime_artifacts(candidate_mode):
                 logger.critical("Runtime artifacts failed disk verification after TX2 promotion!")
@@ -1078,9 +941,11 @@ class SettingService:
         try:
             ensure_directory(Path(settings.MASTER_KEY_FILE).parent, mode=0o700)
             ensure_directory(Path(settings.RUNTIME_BOT_TOKEN_FILE).parent, mode=0o2770, group="ytdl-runtime")
-            ensure_directory(Path(settings.LOCAL_BOT_API_ENV_FILE).parent, mode=0o2770, group=101)
+            if hasattr(settings, "LOCAL_BOT_API_ENV_FILE"):
+                ensure_directory(Path(settings.LOCAL_BOT_API_ENV_FILE).parent, mode=0o2770, group=101)
             ensure_directory(Path(settings.RUNTIME_READY_FILE).parent, mode=0o755)
-            ensure_directory(settings.TRANSFER_DIR, mode=0o755)
+            if hasattr(settings, "TRANSFER_DIR"):
+                ensure_directory(settings.TRANSFER_DIR, mode=0o755)
             ensure_directory(settings.TEMP_DIR, mode=0o755)
         except Exception as e:
             logger.warning("Directory initialization warning: %s", e)
@@ -1262,224 +1127,68 @@ class SettingService:
                     raise HTTPException(status_code=500, detail=f"Local Bot API reload verification failed: {err}")
                 return {"status": "success", "message": "Local Bot API reloaded successfully.", "mode": "local"}
 
-            elif current_mode == target_mode:
+            if current_mode == target_mode:
                 return {"status": "success", "message": f"Mode is already {target_mode}.", "mode": target_mode}
 
-            elif current_mode == "cloud" and target_mode == "local":
-                # Cloud -> Local migration
-                api_id = items.get(SETTING_API_ID).value if SETTING_API_ID in items else None
-                api_hash = (
-                    (decrypt_credential(items[SETTING_API_HASH].value, master_key) if items[SETTING_API_HASH].is_encrypted else items[SETTING_API_HASH].value)
-                    if SETTING_API_HASH in items
-                    else None
-                )
-                if not api_id or not api_hash:
+            target_endpoint = cls.derive_endpoint(target_mode)
+            if target_mode == "local":
+                probe_ok, bot_info, err = await cls.poll_local_api_readiness(bot_token, target_endpoint)
+                if not probe_ok:
                     raise HTTPException(
-                        status_code=400,
-                        detail="Local Bot API credentials (API_ID, API_HASH) must be configured before migrating to local mode.",
+                        status_code=502,
+                        detail=f"Local Bot API verification failed: {err}. Ensure the centralized Local Bot API server is running.",
                     )
-
-                # 1. Stage migration intent & Local PENDING in DB
-                async with conn.begin():
-                    async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                        await cls.set_migration_state(session, "CLOUD_LOGOUT_IN_PROGRESS")
-                        await session.execute(
-                            delete(Setting).where(Setting.key == SETTING_API_MODE, Setting.status == "PENDING")
-                        )
-                        session.add(
-                            Setting(
-                                key=SETTING_API_MODE,
-                                status="PENDING",
-                                value="local",
-                                is_encrypted=False,
-                                description="Telegram Bot API Mode",
-                            )
-                        )
-                        await session.flush()
-
-                # 2. HALT CONSUMERS: remove READY FIRST
-                remove_runtime_ready()
-
-                # 3. Drain period
-                await asyncio.sleep(2.0)
-
-                # 4. Invoke Cloud logOut()
-                cloud_logout_url = f"https://api.telegram.org/bot{bot_token}/logOut"
-                logger.info("Calling Cloud Bot API logOut()...")
-
-                logout_outcome = "UNKNOWN"
-                error_detail = ""
-
-                try:
-                    async with aiohttp.ClientSession() as client:
-                        async with client.post(cloud_logout_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            status_code = resp.status
-                            try:
-                                data = await resp.json()
-                            except Exception:
-                                data = {}
-
-                            if status_code == 200 and data.get("ok") is True and data.get("result") is True:
-                                logout_outcome = "CONFIRMED_SUCCESS"
-                            elif status_code == 429:
-                                logout_outcome = "UNKNOWN"
-                                error_detail = f"Telegram HTTP 429 (Too Many Requests): {data.get('description', '')}"
-                            elif status_code >= 500:
-                                logout_outcome = "UNKNOWN"
-                                error_detail = f"Telegram server error HTTP {status_code}: {data.get('description', '')}"
-                            else:
-                                logout_outcome = "UNKNOWN"
-                                error_detail = f"Telegram HTTP {status_code}: {data.get('description', '')}"
-                except asyncio.TimeoutError:
-                    logout_outcome = "UNKNOWN"
-                    error_detail = "Request timed out calling Cloud logOut"
-                except (aiohttp.ClientError, OSError) as e:
-                    logout_outcome = "UNKNOWN"
-                    error_detail = f"Transport error calling Cloud logOut: {e}"
-
-                # Branch based on outcome
-                if logout_outcome == "CONFIRMED_SUCCESS":
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            await cls.set_migration_state(session, "CLOUD_LOGOUT_SUCCEEDED")
-
-                    # Write local-bot-api.env & trigger reload
-                    write_local_bot_api_env(api_id, api_hash)
-                    write_restart_trigger()
-                    await asyncio.sleep(1.0)
-
-                    # Probe Local Bot API
-                    probe_ok, bot_info, err = await cls.probe_get_me(bot_token, cls.derive_endpoint("local"))
-                    if not probe_ok:
-                        async with conn.begin():
-                            async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                                await cls.set_migration_state(session, "LOCAL_VALIDATION_FAILED", details=err)
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"Local Bot API verification failed after Cloud logOut: {err}. Cloud cooldown in effect; operator resolution required.",
-                        )
-
-                    # Local probe succeeded: Promote to ACTIVE
-                    new_version = 1
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            v_stmt = select(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
-                            v_res = await session.execute(v_stmt)
-                            v_item = v_res.scalar_one_or_none()
-                            if v_item and v_item.value.isdigit():
-                                new_version = int(v_item.value) + 1
-
-                            await session.execute(
-                                update(Setting)
-                                .where(Setting.key == SETTING_API_MODE, Setting.status == "ACTIVE")
-                                .values(value="local")
-                            )
-                            await session.execute(
-                                delete(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
-                            )
-                            session.add(
-                                Setting(
-                                    key=SETTING_CONFIG_VERSION,
-                                    status="ACTIVE",
-                                    value=str(new_version),
-                                    is_encrypted=False,
-                                    description="Telegram Configuration Version",
-                                )
-                            )
-                            await session.execute(delete(Setting).where(Setting.status == "PENDING"))
-                            await cls.set_migration_state(session, "IDLE")
-
-                    write_runtime_bot_token(bot_token)
-                    verify_runtime_artifacts("local")
-
-                    try:
-                        r = get_redis_client()
-                        await r.set("telegram:active:mode", "local")
-                        await r.set("telegram:active:config_version", str(new_version))
-                        await r.publish("telegram:config:reload", json.dumps({"mode": "local", "version": new_version}))
-                    except Exception as re:
-                        logger.warning("Redis sync error: %s", re)
-
-                    write_runtime_ready()
-                    return {"status": "success", "message": "Successfully migrated from Cloud to Local Bot API.", "mode": "local"}
-
-                elif logout_outcome == "CONFIRMED_FAILURE":
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            await cls.set_migration_state(session, "IDLE")
-                            await session.execute(delete(Setting).where(Setting.status == "PENDING"))
-                    write_runtime_ready()
-                    raise HTTPException(status_code=400, detail=f"Cloud logOut rejected before execution: {error_detail}")
-
-                else:  # CLOUD_LOGOUT_UNKNOWN
-                    async with conn.begin():
-                        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                            await cls.set_migration_state(
-                                session,
-                                "CLOUD_LOGOUT_UNKNOWN",
-                                logout_attempted_at=datetime.now(timezone.utc),
-                                details=error_detail,
-                            )
-                    # KEEP READY ABSENT
-                    raise HTTPException(
-                        status_code=504,
-                        detail=f"Cloud logOut outcome is CLOUD_LOGOUT_UNKNOWN ({error_detail}). Telegram may or may not have logged out. System held in halted state. Operator intervention required.",
-                    )
-
-            elif current_mode == "local" and target_mode == "cloud":
-                # Local -> Cloud migration
-                probe_ok, _, err = await cls.probe_get_me(bot_token, cls.derive_endpoint("cloud"))
+            else:
+                probe_ok, bot_info, err = await cls.probe_get_me(bot_token, target_endpoint)
                 if not probe_ok:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Cloud Bot API verification failed: {err}. Note that Telegram may enforce a 10-minute lockout after logOut.",
+                        detail=f"Cloud Bot API verification failed: {err}.",
                     )
 
-                remove_runtime_ready()
-                new_version = 1
-                async with conn.begin():
-                    async with AsyncSession(bind=conn, expire_on_commit=False) as session:
-                        v_stmt = select(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
-                        v_res = await session.execute(v_stmt)
-                        v_item = v_res.scalar_one_or_none()
-                        if v_item and v_item.value.isdigit():
-                            new_version = int(v_item.value) + 1
+            remove_runtime_ready()
+            new_version = 1
+            async with conn.begin():
+                async with AsyncSession(bind=conn, expire_on_commit=False) as session:
+                    v_stmt = select(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
+                    v_res = await session.execute(v_stmt)
+                    v_item = v_res.scalar_one_or_none()
+                    if v_item and v_item.value.isdigit():
+                        new_version = int(v_item.value) + 1
 
-                        await session.execute(
-                            update(Setting)
-                            .where(Setting.key == SETTING_API_MODE, Setting.status == "ACTIVE")
-                            .values(value="cloud")
+                    await session.execute(
+                        update(Setting)
+                        .where(Setting.key == SETTING_API_MODE, Setting.status == "ACTIVE")
+                        .values(value=target_mode)
+                    )
+                    await session.execute(
+                        delete(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
+                    )
+                    session.add(
+                        Setting(
+                            key=SETTING_CONFIG_VERSION,
+                            status="ACTIVE",
+                            value=str(new_version),
+                            is_encrypted=False,
+                            description="Telegram Configuration Version",
                         )
-                        await session.execute(
-                            delete(Setting).where(Setting.key == SETTING_CONFIG_VERSION, Setting.status == "ACTIVE")
-                        )
-                        session.add(
-                            Setting(
-                                key=SETTING_CONFIG_VERSION,
-                                status="ACTIVE",
-                                value=str(new_version),
-                                is_encrypted=False,
-                                description="Telegram Configuration Version",
-                            )
-                        )
-                        await cls.set_migration_state(session, "IDLE")
+                    )
+                    await session.execute(delete(Setting).where(Setting.status == "PENDING"))
+                    await cls.set_migration_state(session, "IDLE")
 
-                write_runtime_bot_token(bot_token)
-                verify_runtime_artifacts("cloud")
+            write_runtime_bot_token(bot_token)
+            verify_runtime_artifacts(target_mode)
 
-                try:
-                    r = get_redis_client()
-                    await r.set("telegram:active:mode", "cloud")
-                    await r.set("telegram:active:config_version", str(new_version))
-                    await r.publish("telegram:config:reload", json.dumps({"mode": "cloud", "version": new_version}))
-                except Exception as re:
-                    logger.warning("Redis sync error: %s", re)
+            try:
+                r = get_redis_client()
+                await r.set("telegram:active:mode", target_mode)
+                await r.set("telegram:active:config_version", str(new_version))
+                await r.publish("telegram:config:reload", json.dumps({"mode": target_mode, "version": new_version}))
+            except Exception as re:
+                logger.warning("Redis sync error: %s", re)
 
-                write_runtime_ready()
-                return {"status": "success", "message": "Successfully migrated from Local to Cloud Bot API.", "mode": "cloud"}
-
-            else:
-                return {"status": "success", "message": f"Mode is already {target_mode}."}
+            write_runtime_ready()
+            return {"status": "success", "message": f"Successfully switched mode to {target_mode}.", "mode": target_mode}
 
     # --------------------------------------------------------------------------
     # Must-Join Customizable Message Management

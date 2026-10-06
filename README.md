@@ -29,14 +29,19 @@ Unlike conventional downloaders that consume gigabytes of server storage, this s
 
 ## ✨ Features
 
-- 🚀 **Production Local Bot API (2000 MB Uploads)**:
-  - Runs self-hosted **Telegram Local Bot API Server 10.3** by default, lifting Telegram's 50 MB cloud limit to **2000 MB (2 GB)** single-file uploads.
-  - **Zero-Multipart Local Handoff**: Completed media in `/transfer/<job-id>/` is handed directly to the Local Bot API server via `file:///transfer/...` URI, avoiding HTTP multipart stream overhead and RAM spikes.
-  - **Cloud Fallback Mode**: Gracefully supports standard Cloud Bot API (`https://api.telegram.org`) with strict 50 MB preflight guard.
+- 🚀 **Centralized Telegram Local Bot API (2000 MB Uploads)**:
+  - Connects to an independent, centralized Telegram Local Bot API server running on the external Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
+  - **Decoupled Client Architecture**: The bot does not build, bundle, or run an embedded Bot API container, eliminating duplicate servers and removing `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` requirements entirely.
+  - **Standard HTTP Multipart Uploads**: Uploads media using aiogram with `is_local=False` directly over Docker bridge networking up to **2000 MB (2 GB)** without requiring shared `/transfer` filesystem volumes or host disk staging.
+  - **Dual Mode Support**: Toggleable between `cloud` mode (default: `https://api.telegram.org`, 50 MB limit) and `local` mode (`http://telegram-bot-api:8081`, 2000 MB limit) via environment variables or Web Admin panel.
+- 🎵 **Enhanced MP3 Audio & Rich ID3v2.3 Metadata**:
+  - Full ID3v2.3 tag embedding (`TIT2` title, `TPE1` artist, `TALB` album, `TDRC` year, `APIC` cover) strictly applied and verified with Mutagen.
+  - Generates aspect-ratio-preserving square `cover.jpg` (500x500 via Pillow) embedded as `APIC` frame in the MP3 and attached as `thumbnail=FSInputFile(cover_jpg_path)` in Telegram `send_audio()`.
+  - Clean, sanitized output filenames (`Artist - Title.mp3` or `Title.mp3`).
 - 🎬 **Authoritative Video Delivery Metadata & Thumbnails**:
   - Probes final processed output files with `ffprobe` to extract authoritative `duration`, `width`, and `height` before delivery (never relies on original YouTube estimates or Telegram client-side inference).
   - Automatically generates aspect-ratio-preserving JPEG thumbnails ($\le 320\times 320$, strictly $< 200\text{ KB}$) from the final output video with luminance probing to avoid black title cards.
-  - Uploads with explicit metadata, `supports_streaming=True`, and attached thumbnail. Retains Local Bot API zero-multipart local file handoff (`file:///transfer/...`) seamlessly with multipart thumbnail attachment.
+  - Uploads with explicit metadata, `supports_streaming=True`, and attached thumbnail.
 - 🎯 **Quality-First Telegram UX**:
   - Dynamically detects actual available resolutions directly from YouTube streams (`2160p`, `1440p`, `1080p`, `720p`, `480p`, `360p`).
   - Previews send the video thumbnail with only the **Video Title** as caption.
@@ -75,12 +80,14 @@ Unlike conventional downloaders that consume gigabytes of server storage, this s
   - **Cloud ➔ Local migration state machine**: Dedicated `telegram_migrations` singleton table (`CHECK (id = 1)`) manages non-atomic cloud `logOut()`. Categorizes timeouts, HTTP 429, and 5xx as `CLOUD_LOGOUT_UNKNOWN`, respecting Telegram's 10-minute cooldown.
   - **Authoritative configuration reads**: Worker and Bot query `Setting` records directly from PostgreSQL for every job/poll, backed by Redis Pub/Sub invalidation and a 30-second drift heartbeat.
   - **Strict 5-step cache channel validation**: Probes channel eligibility via `getChat` and `getChatAdministrators` checking `can_post_messages` without intrusive `sendChatAction` calls.
-  - **Service-reported telemetry**: Worker and Local Bot API report disk metrics into Redis; no cross-service storage volume mounts into Web Admin.
+  - **Service-reported telemetry**: Worker reports disk metrics into Redis; no cross-service storage volume mounts into Web Admin.
 - 🖥️ **Full Web Administration Panel**:
   - Modern, responsive dark SaaS dashboard on host port `8087` (container port `8080`) protected by Argon2id authentication.
-  - Interactive Telegram Configuration panel with live API testing, derived endpoints, and zero-downtime hot reloading.
-  - Complete Must-Join channel management with live bot verification indicators, error details, and toggle controls.
-  - Editable `/start` welcome and Must-Join messages with full Telegram HTML validation and safe first name escaping.
+  - **Queue & Job Management**: Instant "Clear Queue" button (`POST /api/queue/clear`) to cancel waiting jobs safely without touching active jobs, and "Clear Jobs" button (`POST /api/jobs/clear`) to purge finished job history.
+  - **User Management & Cascading Deletion**: User list with job statistics, ban/unban toggles, and "Delete User" button (`DELETE /api/users/{user_id}`) with full cascading deletion across user records, job requests, and logs.
+  - **Telegram Configuration**: Decoupled dual-mode management (`cloud` vs `local`) with live API testing and hot reloading without requiring Telegram API ID/Hash.
+  - **Must-Join Management & Whitelist**: Enforce channel membership with live verification, custom welcome & gate messages, and exempt user whitelist.
+  - **Download Size Limit Controls**: Dynamic download file size limits (`MAX_FILE_SIZE_MB`) and temporary disk safety thresholds.
 
 ---
 
@@ -147,14 +154,11 @@ flowchart TD
         MasterKeyVol["Master Key Storage (/config/master) - 0700 Root"]
         RuntimeTokenVol["Runtime Secret (/config/runtime) - 0640 ytdl-runtime"]
         StateVol["State Storage (/config/state) - READY Flag"]
-        LocalApiConfig["Bot API Config (/config/bot-api) - 0640 UID 101"]
-        TransferVol["Transfer Staging (/transfer) - Zero Multipart"]
         TempVol["Temp Storage (/tmp/ytdl)"]
-        LocalBotApiData["Bot API Data (/var/lib/telegram-bot-api)"]
     end
 
-    subgraph TelegramServices ["Telegram Infrastructure"]
-        LocalBotAPI["Local Bot API Server (10.3 / UID 101)"]
+    subgraph CentralizedInfrastructure ["Centralized Infrastructure (External Docker Network: telegram-bots)"]
+        CentralizedBotAPI["Centralized Local Bot API (http://telegram-bot-api:8081)"]
         CacheChannel["Private Telegram Cache Channel"]
     end
 
@@ -165,24 +169,21 @@ flowchart TD
     Web -->|"Decrypts & writes"| MasterKeyVol
     Web -->|"Writes bot-token"| RuntimeTokenVol
     Web -->|"Writes READY"| StateVol
-    Web -->|"Writes env & trigger"| LocalApiConfig
     Web <--> PG
     Web <--> Redis
 
     Bot -->|"Waits for READY"| StateVol
     Bot -->|"Reads bot-token"| RuntimeTokenVol
     Bot <--> Redis
-    Bot <--> LocalBotAPI
+    Bot -->|"is_local=False (HTTP)"| CentralizedBotAPI
 
     Worker -->|"Waits for READY"| StateVol
     Worker -->|"Reads bot-token"| RuntimeTokenVol
     Worker <-->|"Authoritative ACTIVE query"| PG
     Worker <--> Redis
     Worker <--> TempVol
-    Worker -->|"Stages zero-multipart"| TransferVol
-    TransferVol -->|"file:///transfer/... direct handoff"| LocalBotAPI
-    LocalBotAPI --> LocalBotApiData
-    LocalBotAPI --> CacheChannel
+    Worker -->|"is_local=False (Multipart up to 2000 MB)"| CentralizedBotAPI
+    CentralizedBotAPI --> CacheChannel
 ```
 
 ### 🔐 Telegram Runtime Consistency & State Invariants
@@ -192,41 +193,25 @@ The Telegram integration is engineered around strict operational consistency and
 1. **The `/config/state/READY` Invariant**:
    - **File presence guarantees consistency**: The presence of `/config/state/READY` guarantees that filesystem runtime artifacts strictly match the authoritative `ACTIVE` configuration in PostgreSQL (`config_version = N`).
    - **Universal consumer gating**: Both **Bot Service** (long-polling loop) and **Worker** (job dequeuing in `acquire_next_job()`) check for the existence of `READY`.
-   - **Graceful pause**: If `READY` is unlinked during reconciliation, ordinary mutations, or migrations, Bot polling and Worker job acquisition safely idle without crashing or dropping state.
+   - **Graceful pause**: If `READY` is unlinked during reconciliation or mutations, Bot polling and Worker job acquisition safely idle without crashing or dropping state.
 
 2. **Least-Privilege Credential Isolation**:
    - **Filesystem Permissions**: The runtime bot token `/config/runtime/bot-token` is generated by Web Admin with mode `0640`, owned by Web Admin runtime user and Unix group `ytdl-runtime` (GID `1001`).
    - **Zero Secret Fallback**: Worker and Bot run with supplementary GID `1001` and read the bot token strictly from this volume. Neither service has access to `master.key` or PostgreSQL decryption keys, and production builds strictly disallow `.env` secret fallbacks.
 
-3. **Dual Mutation Lifecycles**:
-   - **Ordinary Mutations (Bot Token / Cache Channel / Limits)**:
-     1. TX1 validates syntax and creates candidate `PENDING` configuration.
-     2. Candidate credentials and channel permissions are verified against Telegram API while `ACTIVE` remains live.
-     3. `/config/state/READY` is unlinked.
-     4. TX2 atomically commits `ACTIVE = N+1` and clears `PENDING`.
-     5. Web Admin writes runtime token and verifies runtime artifacts.
-     6. `/config/state/READY` is restored and change notification is published to Redis.
-   - **Design B Local Bot API Mutations (Port / Host / Worker Handoff)**:
-     1. TX1 validates and creates `PENDING`.
-     2. `/config/state/READY` is unlinked *before* modifying Local Bot API configuration, as the Local Bot API server must be restarted to test candidate settings.
-     3. Candidate `local-bot-api.env` is written and `restart-trigger` is touched.
-     4. Health check probes candidate Local Bot API instance until responsive.
-     5. TX2 atomically commits `ACTIVE = N+1`.
-     6. Web Admin verifies runtime artifacts and restores `/config/state/READY`.
+3. **Decoupled Centralized Local Bot API Integration**:
+   - **No Embedded Container**: The bot is purely an HTTP client connected to the centralized Local Bot API server over the shared `telegram-bots` Docker bridge network. It does not run its own Local Bot API daemon, eliminating container supervisor processes and restart triggers.
+   - **No API ID / API Hash Required**: Because the centralized server handles Telegram MTProto upstream authentication, this bot client only requires the bot token and the base URL (`http://telegram-bot-api:8081`).
+   - **Standard HTTP Multipart (`is_local=False`)**: Files up to 2000 MB are streamed via standard HTTP multipart upload using aiogram directly to the local server endpoint, eliminating shared volume dependencies.
 
 4. **Session-Level Non-Blocking Advisory Locking**:
    - Web Admin acquires `pg_try_advisory_lock(73541629)` on a dedicated connection to prevent concurrent admin configuration modifications, returning HTTP 409 Conflict immediately on contention.
    - Because SQLAlchemy 2.0 `conn.scalar()` automatically opens an implicit transaction block (autobegin), an explicit `await conn.rollback()` is executed immediately after acquiring the lock. This clears the transaction block while retaining the session-level lock, ensuring long-running external HTTP probes do not hold open an idle PostgreSQL transaction.
 
-5. **Cloud ➔ Local Migration State Machine**:
-   - Switching from Cloud Bot API to Local Bot API requires calling Telegram's Cloud `logOut()`, which terminates the bot's cloud session and initiates a mandatory **10-minute cooldown** before that token can return to Cloud.
-   - Managed via a dedicated `telegram_migrations` singleton table (`CHECK (id = 1)`):
-     - `IDLE`: Normal operation.
-     - `CLOUD_LOGOUT_IN_PROGRESS`: `logOut()` request in flight to `api.telegram.org`.
-     - `CLOUD_LOGOUT_SUCCEEDED`: HTTP 200 (`ok=true, result=true`) confirmed. Local Bot API validation begins.
-     - `CLOUD_LOGOUT_UNKNOWN`: Ambiguous outcome caused by network drop, socket timeout, HTTP 429 (Rate Limit), or HTTP 5xx.
-     - `LOCAL_VALIDATION_FAILED`: `logOut()` succeeded, but Local Bot API validation failed.
-   - **Disaster Recovery**: Under `CLOUD_LOGOUT_UNKNOWN` or `LOCAL_VALIDATION_FAILED`, `/config/state/READY` remains unlinked, automatic retries or rollbacks are blocked, and `getMe()` is never used as an oracle (as `getMe()` tests token validity, not session logout state). The administrator is notified via the Web Admin UI to inspect the 10-minute cooldown timer and resolve manually.
+5. **Safe Production Migration Sequence**:
+   - When migrating an existing bot instance between Local Bot API instances or from Cloud, Telegram sessions must never be abruptly broken.
+   - **No Automatic `logOut`**: Application code never issues automated `logOut()` calls.
+   - A step-by-step verified procedure is documented in [Centralized Local Bot API Migration Guide](docs/MIGRATION_CENTRALIZED_LOCAL_BOT_API.md).
 
 6. **Strict 5-Step Cache Channel Validation**:
    - Channel verification executes five non-intrusive Telegram API calls: `getChat`, `getChatAdministrators`, checks administrator status, verifies `can_post_messages` permission bit, and confirms chat type is `channel` or `supergroup`.
@@ -234,7 +219,7 @@ The Telegram integration is engineered around strict operational consistency and
 
 7. **Authoritative Configuration Reads & Resilient Uploads**:
    - The Worker queries `Setting` records directly from PostgreSQL for each job execution (mode, channel ID, configuration version).
-   - Local Bot API zero-multipart uploads feature a 3-attempt exponential retry loop to gracefully withstand transient connection resets during Local Bot API restarts.
+   - Uploads feature a 3-attempt exponential retry loop to gracefully withstand transient connection resets.
 
 ---
 
@@ -257,7 +242,8 @@ The Telegram integration is engineered around strict operational consistency and
    - Create a private channel in Telegram.
    - Add your bot as an **Administrator** with full posting permissions.
    - Retrieve the numeric channel ID (e.g., `-1001234567890`) using [@JsonDumpBot](https://t.me/JsonDumpBot) or [@username_to_id_bot](https://t.me/username_to_id_bot).
-3. **Telegram API Credentials**: Get `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` from [my.telegram.org](https://my.telegram.org).
+3. **External Network (For Local Mode)**:
+   - Ensure the external Docker network `telegram-bots` exists on your Docker host (`docker network create telegram-bots`) with your centralized Local Bot API server running at `http://telegram-bot-api:8081`.
 
 ---
 
@@ -276,7 +262,9 @@ The Telegram integration is engineered around strict operational consistency and
    ADMIN_PASSWORD=SetAStrongPasswordHere
    SECRET_KEY=generate_a_random_64_character_string
    MAX_ACTIVE_JOBS=1
-   MAX_VIDEO_DURATION_SECONDS=7200
+   MAX_FILE_SIZE_MB=2000
+   TELEGRAM_API_MODE=cloud
+   TELEGRAM_API_BASE_URL=https://api.telegram.org
    ```
    *(Telegram bot credentials can also be configured and managed dynamically via the Web Admin Panel)*
 4. Click **Deploy the stack**.
@@ -290,14 +278,17 @@ The Telegram integration is engineered around strict operational consistency and
 git clone https://github.com/musicOverdose/youtubedl.git
 cd youtubedl
 
-# 2. Setup configuration
+# 2. Ensure external telegram-bots network exists
+docker network create telegram-bots || true
+
+# 3. Setup configuration
 cp .env.example .env
 nano .env
 
-# 3. Launch stack
+# 4. Launch stack
 docker compose up -d --build
 
-# 4. View real-time logs
+# 5. View real-time logs
 docker compose logs -f
 ```
 
@@ -312,16 +303,16 @@ Access the dashboard at `http://<your-server-ip>:8087`.
 │ ⚡ YTDL Management Console                                   │
 ├───────────────┬─────────────────────────────────────────────┤
 │ 📊 Dashboard  │ Live CPU, RAM, Disk, Active & Queued counts │
-│ ⏳ Queue      │ Live progress bars, speed, ETA, Pause/Resume│
-│ 📁 Jobs       │ Filterable job history, retry & cancel      │
+│ ⏳ Queue      │ Live progress bars, speed, ETA, Clear Queue │
+│ 📁 Jobs       │ Filterable job history, retry & Clear Jobs  │
 │ ⚡ Cache       │ Inspect cached items, hit stats, delete     │
-│ 👥 Users      │ User list, job statistics, ban/unban        │
+│ 👥 Users      │ User list, job statistics, ban, Delete User │
 │ 🔒 Must Join  │ Enforce channel membership, bot status test │
 │ 💬 Welcome    │ Editable /start message with HTML safety    │
 │ 📺 YouTube    │ Default resolutions, playlist limits        │
 │ 🍪 Cookies    │ Netscape cookies.txt upload, paste, test    │
 │ 🤖 AI Trans   │ OpenAI-compatible subtitle translation      │
-│ ⚙️ Settings   │ Video duration limit, safety controls       │
+│ ⚙️ Settings   │ Max file size limit, safety controls        │
 │ 🖥️ System     │ Service health, Prometheus /metrics         │
 │ 📝 Logs       │ Real-time structured system logs            │
 │ 🛡️ Audit Log  │ Security audit trail of admin actions       │
@@ -335,10 +326,9 @@ Access the dashboard at `http://<your-server-ip>:8087`.
 | Variable | Default | Description |
 |---|---|---|
 | `BOT_TOKEN` | *Optional / Web Admin* | Telegram Bot token (configurable via Web Admin) |
-| `TELEGRAM_API_ID` | *Optional / Web Admin* | Telegram App ID (configurable via Web Admin) |
-| `TELEGRAM_API_HASH` | *Optional / Web Admin* | Telegram App Hash (configurable via Web Admin) |
 | `TELEGRAM_CACHE_CHANNEL_ID` | *Optional / Web Admin* | Channel ID for permanent media cache |
-| `TELEGRAM_API_BASE_URL` | `http://telegram-bot-api:8081` | Bot API URL (or local bot API server) |
+| `TELEGRAM_API_MODE` | `cloud` | Bot API connection mode: `cloud` or `local` |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Base URL for Telegram Bot API (`http://telegram-bot-api:8081` in local mode) |
 | `WEB_HOST_PORT` | `8087` | Web administration panel host port (container: 8080) |
 | `ADMIN_USERNAME` | `admin` | Administrator login username |
 | `ADMIN_PASSWORD` | *Required on fresh install* | Initial administrator login password (hashed with Argon2id) |
@@ -347,9 +337,8 @@ Access the dashboard at `http://<your-server-ip>:8087`.
 | `SECRET_KEY` | *Auto* | Secret key for signing session tokens |
 | `MAX_ACTIVE_JOBS` | `1` | Global concurrent processing limit |
 | `MAX_CONCURRENT_PER_USER` | `1` | Max concurrent jobs per user |
-| `MAX_VIDEO_DURATION_SECONDS`| `7200` | Max video duration (default 2 hours) |
-| `ALLOW_UNKNOWN_DURATION` | `false` | Reject videos with unknown length |
-| `CACHE_HIT_BYPASSES_DURATION_LIMIT` | `true` | Deliver cached videos even if over duration limit |
+| `MAX_FILE_SIZE_MB` | `2000` | Max video/audio download size in MB (50 MB in cloud mode) |
+| `CACHE_HIT_BYPASSES_DURATION_LIMIT` | `true` | Deliver cached videos even if over size limit |
 | `MAX_TEMP_STORAGE_GB` | `30` | Safety limit for temporary storage |
 | `DEFAULT_MAX_HEIGHT` | `1080` | Default maximum video resolution |
 | `PLAYLISTS_ENABLED` | `false` | Enable/disable playlist downloads |
@@ -378,7 +367,7 @@ Access the dashboard at `http://<your-server-ip>:8087`.
 
 ## 🧪 Testing
 
-The repository contains a comprehensive 102-test automated test suite (96 passed, 6 PostgreSQL-backed skipped locally):
+The repository contains a comprehensive 175-test automated test suite (169 passed, 6 PostgreSQL-backed skipped locally without live DB):
 
 ```bash
 # Run complete test suite:
@@ -386,45 +375,37 @@ pytest -v
 ```
 
 Tests cover:
+- **Centralized Local Bot API & Dual-Mode Client**:
+  - aiogram client with `is_local=False` connecting over Docker network
+  - Toggleable `cloud` vs `local` mode with strict 50 MB / 2000 MB payload thresholds
+  - Removal of `API_ID` and `API_HASH` credential dependencies across all layers
+  - Safe migration documentation verification
+- **Rich MP3 Metadata & Audio Delivery**:
+  - ID3v2.3 tag embedding (`TIT2`, `TPE1`, `TALB`, `TDRC`, `APIC`) strictly verified with Mutagen
+  - 500x500 square thumbnail generation and dual usage: embedded `APIC` frame + Telegram `send_audio(thumbnail=...)`
+  - Sanitized audio filenames (`Artist - Title.mp3` or `Title.mp3`)
+- **Queue, Job History, and User Cascade Controls**:
+  - Transaction-safe queue clearing (`POST /api/queue/clear`) preserving active jobs in DB & Redis
+  - Guarded job history purging (`POST /api/jobs/clear`) never affecting active or waiting jobs
+  - User deletion cascading (`DELETE /api/users/{user_id}`) across user records, job requests, and logs
 - **Video Delivery Metadata & Thumbnails**:
-  - `ffprobe` metadata extraction against final processed video files (`duration`, `width`, `height` in landscape, portrait, and square formats)
-  - Failure behavior on missing or unreadable files (raising `ValueError` cleanly without fabricated values)
+  - `ffprobe` metadata extraction against final processed video files (`duration`, `width`, `height`)
   - Aspect-ratio-preserving JPEG thumbnail generation bounded to $\le 320\times 320$ and $< 200\text{ KB}$
   - Black title-card fallback with luminance probing
-  - Local Bot API mixed-mode delivery (zero-multipart local video handoff alongside multipart thumbnail attachment)
   - Worker pipeline resilience ensuring video delivery even if thumbnail generation fails
 - **Hardened Must-Join Channel Gate & Security**:
   - Gate coverage on `/start`, URL submission, quality/codec selection, audio extraction, and subtitle requests
   - Channel error distinction (`NOT_MEMBER`, `CHANNEL_NOT_FOUND`, `BOT_INSUFFICIENT_PERMISSIONS`, `BOT_NOT_MEMBER`, `TELEGRAM_API_ERROR`)
-  - Inline keyboard generation with channel URLs and fixed `must_join:check` callback
   - Server-side pending action store with user/chat binding, 15-minute TTL, and atomic one-time consumption
-  - Telegram HTML parse-mode validation and safe first name escaping on custom messages
-- **Telegram Dual-Mode & Zero-Multipart Transfer**:
-  - Direct local handoff via `file:///transfer/...` URI in Local mode
-  - Strict 50 MB preflight rejection and `FSInputFile` usage in Cloud mode
-  - Dynamic endpoint derivation (`http://telegram-bot-api:8081` vs `https://api.telegram.org`)
-  - Staged directory cleanup on startup and post-upload
-  - Worker 3-attempt upload retry loop on transient Local Bot API connection resets
+  - Exempt users whitelist matching by user ID or username
 - **Non-Blocking Advisory Locking & Transaction State Machine**:
   - `pg_try_advisory_lock(73541629)` immediate HTTP 409 Conflict under concurrency
   - Explicit rollback of SQLAlchemy 2.0 autobegin clearing implicit transactions while retaining session lock
-  - Short Transaction 1 (create `PENDING`), external validation probes, Short Transaction 2 (promote to `ACTIVE`)
-  - Automatic rollback on TCP/probe failure, restoring candidate env files and deleting `PENDING`
   - Startup reconciliation and universal readiness gating (`/config/state/READY`) for Bot and Worker
-- **Cloud ➔ Local Migration State Machine & Database Invariants**:
-  - Dedicated `telegram_migrations` singleton table enforcing `CHECK (id = 1)`
-  - State machine lifecycle transitions: `IDLE`, `CLOUD_LOGOUT_IN_PROGRESS`, `CLOUD_LOGOUT_SUCCEEDED`, `CLOUD_LOGOUT_UNKNOWN`, `LOCAL_VALIDATION_FAILED`
-  - Strict classification of timeouts, network disconnects, HTTP 429, and 5xx as `CLOUD_LOGOUT_UNKNOWN`
-  - Real PostgreSQL 17 integration testing for migration state transitions, advisory locks, and channel validations
-- **Service-Reported Telemetry**:
-  - Worker disk telemetry reporting (`/tmp/ytdl` and `/transfer` usage to Redis)
-  - Telegram Local Bot API telemetry reporting (`/var/lib/telegram-bot-api` usage to Redis)
-  - System service aggregation and least-privilege storage boundary validation
 - **Security & Secret Management**:
   - Fernet master key generation fail-safe against pre-existing encrypted PostgreSQL rows
-  - Secret masking and log redaction for `/bot<token>/` and 32-hex API hashes
-  - Strict Unix file permission enforcement (`0640` group `ytdl-runtime`, `0640` GID 101, `0644` state)
-  - No secret fallback to `.env` in production Bot or Worker environments
+  - Secret masking and log redaction for `/bot<token>/`
+  - Strict Unix file permission enforcement (`0640` group `ytdl-runtime`, `0644` state)
   - Argon2id password hashing and session token verification
 - **Media Processing & Business Logic**:
   - Dynamic quality extraction & descending order
@@ -433,7 +414,6 @@ Tests cover:
   - Deterministic cache key generation & cache invalidation
   - Redis FIFO queue ordering & derived position calculation
   - Concurrency race-safety with atomic Lua scripts
-  - Authoritative Must-Join channel checks & customizable template rendering
   - Cookie Netscape format validation & atomic file writes
 
 ---

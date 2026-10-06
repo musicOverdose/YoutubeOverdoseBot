@@ -45,12 +45,17 @@ def transfer_env(monkeypatch):
 
 # 1. TelegramClientFactory: Token from File, Mode from Redis
 @pytest.mark.asyncio
-async def test_telegram_client_factory_local_mode(transfer_env):
+async def test_telegram_client_factory_local_mode(transfer_env, monkeypatch):
+    from tests.mock_redis import MockRedis
+    mock_r = MockRedis()
+    await mock_r.set("telegram:active:mode", "local")
+    monkeypatch.setattr("src.worker.telegram_factory.get_redis_client", lambda: mock_r)
+
     bot, mode = await TelegramClientFactory.get_client()
     assert bot.token == "123456:RUNTIME_TOKEN"
     assert mode == "local"
-    # Local Bot API session should have is_local=True
-    assert bot.session.api.is_local is True
+    # Centralized Local Bot API session should have is_local=False (standard HTTP multipart upload)
+    assert bot.session.api.is_local is False
     assert "8081" in bot.session.api.base
     await bot.session.close()
 
@@ -70,7 +75,7 @@ async def test_telegram_client_factory_cloud_mode(transfer_env, monkeypatch):
     await bot.session.close()
 
 
-# 2. Local Mode: Zero-Multipart File Handoff via URI
+# 2. Local Mode: Standardized FSInputFile Multipart Upload (is_local=False)
 @pytest.mark.asyncio
 async def test_local_mode_send_media_handoff(transfer_env):
     processor = JobProcessor()
@@ -96,18 +101,10 @@ async def test_local_mode_send_media_handoff(transfer_env):
     assert msg_id == 999
     assert size == 1024
 
-    # Verify send_video was called with string URI (file:///transfer/job-123/...)
     mock_bot.send_video.assert_called_once()
     call_kwargs = mock_bot.send_video.call_args.kwargs
     video_arg = call_kwargs["video"]
-    assert isinstance(video_arg, str)
-    assert video_arg.startswith("file://")
-    assert "job-123" in video_arg
-    assert video_arg.endswith(".mp4")
-
-    # Verify transfer job dir was purged immediately post-upload
-    job_transfer_dir = os.path.join(transfer_env["transfer"], "job-123")
-    assert not os.path.exists(job_transfer_dir)
+    assert isinstance(video_arg, FSInputFile)
 
 
 # 3. Cloud Mode: 50 MB Preflight Limit Check
@@ -182,29 +179,24 @@ async def test_startup_recovery_cleans_transfer_dir(transfer_env, db_session):
     assert not os.path.exists(stale_folder)
 
 
-# 5. Local Bot API Mixed Mode Integration: file:// URI video + multipart thumbnail
+# 5. Centralized Local Bot API Multipart Integration: FSInputFile video + thumbnail
 @pytest.mark.asyncio
 async def test_local_bot_api_mixed_mode_integration(tmp_path):
-    """
-    CRITICAL integration test against Local Bot API mixed mode:
-    Proves that aiogram SendVideo correctly builds:
-    - video supplied as local file URI (string 'file:///transfer/...')
-    - thumbnail supplied via multipart upload ('attach://...')
-    - explicit duration, width, height
-    - supports_streaming=True
-    """
     from aiogram import Bot
     from aiogram.methods import SendVideo
     from aiogram.types import FSInputFile
 
     bot = Bot("123456:RUNTIME_TOKEN")
+    video_file = str(tmp_path / "video.mp4")
+    with open(video_file, "wb") as f:
+        f.write(b"MP4_VIDEO_BYTES")
     thumb_file = str(tmp_path / "thumb.jpg")
     with open(thumb_file, "wb") as f:
         f.write(b"JPEG_THUMBNAIL_BYTES")
 
     method = SendVideo(
         chat_id=-1001234567890,
-        video="file:///transfer/job-test/output.mp4",
+        video=FSInputFile(video_file),
         thumbnail=FSInputFile(thumb_file),
         duration=75,
         width=1920,
@@ -215,9 +207,10 @@ async def test_local_bot_api_mixed_mode_integration(tmp_path):
     form_data = bot.session.build_form_data(bot, method)
     fields = {f[0]["name"]: f for f in form_data._fields}
 
-    # 1. Video MUST be string URI (zero-multipart local handoff)
+    # 1. Video MUST be multipart uploaded with attach:// reference
     assert "video" in fields
-    assert fields["video"][2] == "file:///transfer/job-test/output.mp4"
+    video_ref = fields["video"][2]
+    assert video_ref.startswith("attach://")
 
     # 2. Explicit metadata must be present
     assert str(fields["duration"][2]) == "75"

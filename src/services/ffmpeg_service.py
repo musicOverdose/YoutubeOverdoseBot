@@ -1,8 +1,12 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
+import re
 import signal
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB, TDRC, ID3NoHeaderError
+from PIL import Image
 from src.core.logger import setup_logger
 
 logger = setup_logger("ffmpeg_service")
@@ -147,6 +151,181 @@ class FFmpegService:
 
         return await cls.run_subprocess(cmd, cancellation_event)
 
+    @staticmethod
+    def resolve_audio_metadata(
+        info_dict: Optional[Dict[str, Any]],
+        fallback_title: str = "Audio Track",
+    ) -> Tuple[str, str, str, str, int]:
+        """
+        Resolves (title, artist, album, year, duration) with robust fallbacks.
+        Never returns empty strings for title, artist, or album.
+        """
+        info = info_dict or {}
+        raw_title = (info.get("title") or fallback_title).strip()
+        if not raw_title:
+            raw_title = "Audio Track"
+
+        # Artist resolution
+        artist = (
+            info.get("artist")
+            or info.get("creator")
+            or info.get("uploader")
+            or info.get("channel")
+            or ""
+        ).strip()
+
+        # Parse title if " - " is present and artist is missing or generic
+        title = raw_title
+        if " - " in raw_title:
+            parts = raw_title.split(" - ", 1)
+            candidate_artist = parts[0].strip()
+            candidate_title = parts[1].strip()
+            if candidate_artist and candidate_title:
+                if not artist or artist.lower() in ("youtube", "various artists", "unknown"):
+                    artist = candidate_artist
+                title = candidate_title
+
+        # Clean unwanted suffixes in title (e.g. "(Official Music Video)", "[Official Audio]")
+        cleaned_title = re.sub(
+            r"\s*[\(\[](?:official\s*(?:video|audio|music\s*video|lyric\s*video|hd|4k)?|lyrics|audio|mv)[\)\]]",
+            "",
+            title,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned_title:
+            title = cleaned_title
+
+        if not artist:
+            artist = "Unknown Artist"
+
+        # Album resolution
+        album = (info.get("album") or f"{title} - Single").strip()
+        if not album:
+            album = f"{title} - Single"
+
+        # Year resolution
+        year = ""
+        release_date = info.get("release_date") or info.get("upload_date")
+        if release_date and len(str(release_date)) >= 4:
+            year = str(release_date)[:4]
+        elif info.get("release_year"):
+            year = str(info.get("release_year"))
+        if not year or not year.isdigit():
+            year = str(datetime.now(timezone.utc).year)
+
+        # Duration
+        duration = int(info.get("duration") or 0)
+
+        return title, artist, album, year, duration
+
+    @staticmethod
+    def generate_safe_audio_filename(artist: str, title: str) -> str:
+        """
+        Generates clean sanitized filename: 'Artist - Title.mp3' or 'Title.mp3'.
+        Removes invalid filesystem characters: / \\ : * ? " < > |
+        Ensures filename is never empty, safe for filesystem and Telegram.
+        """
+        if artist and artist.lower() != "unknown artist" and artist.lower() not in title.lower():
+            base = f"{artist} - {title}"
+        else:
+            base = title
+
+        # Replace invalid filesystem characters
+        safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
+        safe_base = re.sub(r"\s+", " ", safe_base).strip()
+
+        if not safe_base:
+            safe_base = "Audio Track"
+
+        if len(safe_base) > 100:
+            safe_base = safe_base[:100].strip()
+
+        return f"{safe_base}.mp3"
+
+    @staticmethod
+    def prepare_cover_image(source_cover_path: Optional[str], output_cover_path: str) -> str:
+        """
+        Prepares a high quality square JPEG cover image suitable for both ID3 APIC and Telegram thumbnail.
+        Guarantees that output_cover_path exists and is a valid JPEG.
+        """
+        try:
+            if source_cover_path and os.path.exists(source_cover_path):
+                img = Image.open(source_cover_path).convert("RGB")
+                w, h = img.size
+                min_dim = min(w, h)
+                left = (w - min_dim) // 2
+                top = (h - min_dim) // 2
+                img = img.crop((left, top, left + min_dim, top + min_dim))
+                img = img.resize((500, 500), Image.Resampling.LANCZOS)
+                img.save(output_cover_path, "JPEG", quality=90)
+                return output_cover_path
+        except Exception as e:
+            logger.warning("Could not convert source cover %s: %s. Generating fallback cover.", source_cover_path, e)
+
+        # Fallback cover generation
+        try:
+            img = Image.new("RGB", (500, 500), color=(26, 32, 44))
+            img.save(output_cover_path, "JPEG", quality=90)
+        except Exception as fe:
+            logger.error("Failed to generate fallback cover: %s", fe)
+        return output_cover_path
+
+    @staticmethod
+    def apply_and_verify_id3_tags(
+        mp3_path: str,
+        title: str,
+        artist: str,
+        album: str,
+        year: Union[str, int],
+        cover_image_path: Optional[str] = None,
+    ) -> bool:
+        """
+        Embeds and strictly verifies ID3v2.3 tags (TIT2, TPE1, TALB, TDRC, APIC).
+        """
+        try:
+            try:
+                tags = ID3(mp3_path)
+            except ID3NoHeaderError:
+                tags = ID3()
+
+            tags.delete(mp3_path)
+            tags = ID3()
+
+            tags.add(TIT2(encoding=3, text=title))
+            tags.add(TPE1(encoding=3, text=artist))
+            tags.add(TALB(encoding=3, text=album))
+            tags.add(TDRC(encoding=3, text=str(year)))
+
+            if cover_image_path and os.path.exists(cover_image_path):
+                with open(cover_image_path, "rb") as f:
+                    cover_bytes = f.read()
+                tags.add(APIC(
+                    encoding=3,
+                    mime="image/jpeg",
+                    type=3,  # Cover (front)
+                    desc="Cover",
+                    data=cover_bytes,
+                ))
+
+            tags.save(mp3_path, v2_version=3)
+
+            # Verification step: read back and strictly verify required frames
+            read_tags = ID3(mp3_path)
+            required_frames = ["TIT2", "TPE1", "TALB", "TDRC"]
+            missing = [f for f in required_frames if f not in read_tags]
+            if missing:
+                raise ValueError(f"ID3v2.3 verification failed: missing frames {missing}")
+
+            if cover_image_path and os.path.exists(cover_image_path):
+                if not any(k.startswith("APIC") for k in read_tags.keys()):
+                    raise ValueError("ID3v2.3 verification failed: missing APIC frame")
+
+            logger.info("ID3v2.3 tags strictly verified for %s (TIT2, TPE1, TALB, TDRC, APIC)", mp3_path)
+            return True
+        except Exception as e:
+            logger.error("ID3 tagging or verification failed on %s: %s", mp3_path, e)
+            raise
+
     @classmethod
     async def extract_mp3(
         cls,
@@ -154,37 +333,41 @@ class FFmpegService:
         output_mp3_path: str,
         title: str,
         artist: Optional[str] = None,
+        album: Optional[str] = None,
+        year: Optional[Union[str, int]] = None,
         cover_image_path: Optional[str] = None,
         cancellation_event: Optional[asyncio.Event] = None,
     ) -> bool:
-        """Extracts and converts audio to MP3 with ID3 metadata and optional cover thumbnail."""
-        cmd = ["ffmpeg", "-y", "-i", input_audio_path]
+        """
+        Extracts and converts audio to MP3 with verified ID3v2.3 metadata and embedded cover art.
+        """
+        artist = artist or "Unknown Artist"
+        album = album or f"{title} - Single"
+        year = str(year) if year else str(datetime.now(timezone.utc).year)
 
-        has_cover = cover_image_path and os.path.exists(cover_image_path)
-        if has_cover:
-            cmd.extend(["-i", cover_image_path, "-map", "0:a", "-map", "1:0"])
-        else:
-            cmd.extend(["-map", "0:a"])
-
-        cmd.extend([
+        # 1. Transcode audio using libmp3lame with high quality
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_audio_path,
+            "-vn",
             "-c:a", "libmp3lame",
-            "-q:a", "2",  # VBR ~190 kbps high quality
-            "-metadata", f"title={title}",
-        ])
+            "-b:a", "320k",
+            output_mp3_path,
+        ]
+        ok = await cls.run_subprocess(cmd, cancellation_event)
+        if not ok or not os.path.exists(output_mp3_path):
+            return False
 
-        if artist:
-            cmd.extend(["-metadata", f"artist={artist}"])
-
-        if has_cover:
-            cmd.extend([
-                "-c:v", "mjpeg",
-                "-id3v2_version", "3",
-                "-metadata:s:v", 'title="Album cover"',
-                "-metadata:s:v", 'comment="Cover (front)"',
-            ])
-
-        cmd.append(output_mp3_path)
-        return await cls.run_subprocess(cmd, cancellation_event)
+        # 2. Embed and verify ID3v2.3 tags
+        cls.apply_and_verify_id3_tags(
+            mp3_path=output_mp3_path,
+            title=title,
+            artist=artist,
+            album=album,
+            year=year,
+            cover_image_path=cover_image_path,
+        )
+        return True
 
     @staticmethod
     async def run_subprocess(

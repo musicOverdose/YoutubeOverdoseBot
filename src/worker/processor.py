@@ -57,8 +57,9 @@ class JobProcessor:
                             temp_bytes += os.path.getsize(fp)
 
             transfer_bytes = 0
-            if os.path.exists(settings.TRANSFER_DIR):
-                for root, _, files in os.walk(settings.TRANSFER_DIR):
+            transfer_dir = getattr(settings, "TRANSFER_DIR", None)
+            if transfer_dir and os.path.exists(transfer_dir):
+                for root, _, files in os.walk(transfer_dir):
                     for f in files:
                         fp = os.path.join(root, f)
                         if os.path.exists(fp) and not os.path.islink(fp):
@@ -84,111 +85,83 @@ class JobProcessor:
         job_id: str,
         job_title: str,
         caption: str = "",
+        custom_filename: Optional[str] = None,
+        performer: Optional[str] = None,
+        duration: Optional[int] = None,
+        thumbnail: Optional[FSInputFile] = None,
         extra_kwargs: Optional[dict] = None,
     ) -> Tuple[int, int]:
         """
-        Mode-branched media upload handler:
-        - Local Mode: Stages file to /transfer/<job-id>/<filename> with 0755/0644 permissions,
-          passes string URI (file:///transfer/...) to Local Bot API (zero-multipart local handoff),
-          and cleans up immediately post-upload.
-        - Cloud Mode: Preflights 50 MB limit, streams multipart via FSInputFile.
+        Sends media to Telegram cache channel using standard HTTP multipart upload via FSInputFile (is_local=False).
+        Supports Cloud Mode (<= 50 MB) and Centralized Local Mode (<= 2000 MB).
         """
         extra_kwargs = extra_kwargs or {}
         file_size = os.path.getsize(local_file_path)
-        transfer_job_dir = Path(settings.TRANSFER_DIR) / job_id
 
         if api_mode == "cloud":
-            # 50 MB preflight check
-            if file_size > 50 * 1024 * 1024:
+            max_bytes = 50 * 1024 * 1024
+            if file_size > max_bytes:
                 size_mb = round(file_size / (1024 * 1024), 1)
                 raise ValueError(
                     f"File size ({size_mb} MB) exceeds Cloud Bot API limit of 50 MB. "
                     "Switch to Local Bot API in Web Admin for up to 2000 MB uploads."
                 )
-
-            # Upload via FSInputFile (multipart)
-            if operation == OperationType.VIDEO.value or operation == "VIDEO":
-                tg_file = FSInputFile(local_file_path, filename=f"{job_title[:60]}.mp4")
-                msg = await bot.send_video(
-                    chat_id=channel_id,
-                    video=tg_file,
-                    caption=caption,
-                    **extra_kwargs,
-                )
-            elif operation == OperationType.AUDIO.value or operation == "AUDIO":
-                tg_file = FSInputFile(local_file_path, filename=f"{job_title[:60]}.mp3")
-                msg = await bot.send_audio(
-                    chat_id=channel_id,
-                    audio=tg_file,
-                    title=job_title,
-                    **extra_kwargs,
-                )
-            else:
-                tg_file = FSInputFile(local_file_path, filename=f"{job_title[:50]}.srt")
-                msg = await bot.send_document(
-                    chat_id=channel_id,
-                    document=tg_file,
-                    caption=caption,
-                    **extra_kwargs,
-                )
-            return msg.message_id, file_size
-
         else:
-            # Local Bot API Mode: Zero-multipart local file handoff
-            try:
-                transfer_job_dir.mkdir(parents=True, exist_ok=True)
-                os.chmod(transfer_job_dir, 0o755)
-            except OSError as e:
-                logger.debug("Failed to set chmod 0755 on %s: %s", transfer_job_dir, e)
+            max_bytes = 2000 * 1024 * 1024
+            if file_size > max_bytes:
+                size_mb = round(file_size / (1024 * 1024), 1)
+                raise ValueError(
+                    f"File size ({size_mb} MB) exceeds Local Bot API limit of 2000 MB."
+                )
 
-            staged_file = transfer_job_dir / Path(local_file_path).name
-            shutil.copy2(local_file_path, staged_file)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
             try:
-                os.chmod(staged_file, 0o644)
-            except OSError as e:
-                logger.debug("Failed to set chmod 0644 on %s: %s", staged_file, e)
-
-            file_uri = staged_file.resolve().as_uri()
-            logger.info("Local Bot API handoff via URI: %s", file_uri)
-
-            try:
-                max_retries = 3
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        if operation == OperationType.VIDEO.value or operation == "VIDEO":
-                            msg = await bot.send_video(
-                                chat_id=channel_id,
-                                video=file_uri,
-                                caption=caption,
-                                **extra_kwargs,
-                            )
-                        elif operation == OperationType.AUDIO.value or operation == "AUDIO":
-                            msg = await bot.send_audio(
-                                chat_id=channel_id,
-                                audio=file_uri,
-                                title=job_title,
-                                **extra_kwargs,
-                            )
-                        else:
-                            msg = await bot.send_document(
-                                chat_id=channel_id,
-                                document=file_uri,
-                                caption=caption,
-                                **extra_kwargs,
-                            )
-                        return msg.message_id, file_size
-                    except Exception as ex:
-                        if attempt < max_retries:
-                            logger.warning(
-                                "Local Bot API handoff attempt %d/%d failed: %s. Retrying in 1s...",
-                                attempt, max_retries, ex
-                            )
-                            await asyncio.sleep(1.0)
-                        else:
-                            raise
-            finally:
-                # Immediate cleanup of transfer directory
-                shutil.rmtree(transfer_job_dir, ignore_errors=True)
+                if operation == OperationType.VIDEO.value or operation == "VIDEO":
+                    upload_name = custom_filename or f"{job_title[:60]}.mp4"
+                    tg_file = FSInputFile(local_file_path, filename=upload_name)
+                    msg = await bot.send_video(
+                        chat_id=channel_id,
+                        video=tg_file,
+                        caption=caption,
+                        **extra_kwargs,
+                    )
+                elif operation == OperationType.AUDIO.value or operation == "AUDIO":
+                    upload_name = custom_filename or f"{job_title[:60]}.mp3"
+                    tg_file = FSInputFile(local_file_path, filename=upload_name)
+                    audio_kwargs = dict(extra_kwargs)
+                    if performer:
+                        audio_kwargs["performer"] = performer
+                    if duration:
+                        audio_kwargs["duration"] = int(duration)
+                    if thumbnail:
+                        audio_kwargs["thumbnail"] = thumbnail
+                    msg = await bot.send_audio(
+                        chat_id=channel_id,
+                        audio=tg_file,
+                        title=job_title,
+                        caption=caption if caption else None,
+                        **audio_kwargs,
+                    )
+                else:
+                    upload_name = custom_filename or f"{job_title[:50]}.srt"
+                    tg_file = FSInputFile(local_file_path, filename=upload_name)
+                    msg = await bot.send_document(
+                        chat_id=channel_id,
+                        document=tg_file,
+                        caption=caption,
+                        **extra_kwargs,
+                    )
+                return msg.message_id, file_size
+            except Exception as ex:
+                if attempt < max_retries:
+                    logger.warning(
+                        "Upload attempt %d/%d failed: %s. Retrying in 1s...",
+                        attempt, max_retries, ex
+                    )
+                    await asyncio.sleep(1.0)
+                else:
+                    raise
 
     async def process_job(self, job_id: str) -> None:
         """
@@ -197,7 +170,6 @@ class JobProcessor:
         """
         job_dir = os.path.join(settings.TEMP_DIR, job_id)
         os.makedirs(job_dir, exist_ok=True)
-        transfer_job_dir = Path(settings.TRANSFER_DIR) / job_id
 
         # Resolve authoritative non-secret Telegram configuration directly from PostgreSQL
         api_mode = "local"
@@ -243,7 +215,6 @@ class JobProcessor:
                 logger.error(f"Job {job_id} not found in database")
                 await QueueService.release_active_job(job_id)
                 shutil.rmtree(job_dir, ignore_errors=True)
-                shutil.rmtree(transfer_job_dir, ignore_errors=True)
                 if own_bot and bot is not None:
                     await bot.session.close()
                 return
@@ -269,7 +240,6 @@ class JobProcessor:
                 await notifier.update("❌", "Failed", disk_err, force=True)
                 await QueueService.release_active_job(job_id, queue_type=job.queue_type)
                 await asyncio.to_thread(shutil.rmtree, job_dir, True)
-                await asyncio.to_thread(shutil.rmtree, transfer_job_dir, True)
                 if own_bot and bot is not None:
                     await bot.session.close()
                 return
@@ -529,6 +499,18 @@ class JobProcessor:
                     await session.commit()
                     await notifier.update("⬇️", "Downloading", "Fetching high quality audio...", force=True)
 
+                    # Extract video metadata to get rich audio tags (artist, title, upload_date, etc.)
+                    meta_info = {}
+                    try:
+                        meta_info = await YtDlpService.extract_metadata(job.canonical_url)
+                    except Exception as meta_err:
+                        logger.warning("Could not extract rich metadata for audio job %s: %s", job_id, meta_err)
+
+                    audio_title, audio_artist, audio_album, audio_year, audio_duration = FFmpegService.resolve_audio_metadata(
+                        info_dict=meta_info, fallback_title=job.title
+                    )
+                    safe_audio_filename = FFmpegService.generate_safe_audio_filename(artist=audio_artist, title=audio_title)
+
                     audio_template = os.path.join(job_dir, "audio.%(ext)s")
                     ydl_opts = YtDlpService.get_base_opts()
                     ydl_opts.update({
@@ -568,8 +550,15 @@ class JobProcessor:
                         raise FileNotFoundError("Downloaded audio file not found")
                     input_audio = audio_files[0]
 
-                    thumb_files = glob.glob(os.path.join(job_dir, "audio.*.jpg")) or glob.glob(os.path.join(job_dir, "audio.*.webp"))
-                    cover_path = thumb_files[0] if thumb_files else None
+                    # Prepare square JPEG cover art for both ID3 APIC embedding and Telegram thumbnail
+                    thumb_files = (
+                        glob.glob(os.path.join(job_dir, "audio.*.jpg"))
+                        or glob.glob(os.path.join(job_dir, "audio.*.webp"))
+                        or glob.glob(os.path.join(job_dir, "audio.*.png"))
+                    )
+                    raw_cover_path = thumb_files[0] if thumb_files else None
+                    cover_jpg_path = os.path.join(job_dir, "cover.jpg")
+                    FFmpegService.prepare_cover_image(raw_cover_path, cover_jpg_path)
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
@@ -579,8 +568,11 @@ class JobProcessor:
                     mp3_ok = await FFmpegService.extract_mp3(
                         input_audio_path=input_audio,
                         output_mp3_path=output_mp3,
-                        title=job.title,
-                        cover_image_path=cover_path,
+                        title=audio_title,
+                        artist=audio_artist,
+                        album=audio_album,
+                        year=audio_year,
+                        cover_image_path=cover_jpg_path,
                     )
                     if not mp3_ok or not os.path.exists(output_mp3):
                         raise RuntimeError("MP3 conversion failed")
@@ -589,6 +581,8 @@ class JobProcessor:
                     await session.commit()
                     await notifier.update("📤", "Uploading...", "Sending MP3 to Telegram...", force=True)
 
+                    tg_thumbnail = FSInputFile(cover_jpg_path) if os.path.exists(cover_jpg_path) else None
+
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
                         api_mode=api_mode,
@@ -596,14 +590,18 @@ class JobProcessor:
                         local_file_path=output_mp3,
                         operation=job.operation,
                         job_id=job_id,
-                        job_title=job.title,
+                        job_title=audio_title,
+                        custom_filename=safe_audio_filename,
+                        performer=audio_artist,
+                        duration=audio_duration,
+                        thumbnail=tg_thumbnail,
                     )
 
                     cache_entry = await CacheService.save_cache_entry(
                         session=session,
                         cache_key=job.cache_key,
                         source_id=job.source_id,
-                        title=job.title,
+                        title=audio_title,
                         operation=job.operation,
                         codec="MP3",
                         file_size=file_size,
@@ -937,8 +935,7 @@ class JobProcessor:
 
                 # GUARANTEED CLEANUP:
                 await asyncio.to_thread(shutil.rmtree, job_dir, True)
-                await asyncio.to_thread(shutil.rmtree, transfer_job_dir, True)
-                logger.info(f"Cleaned directories for job {job_id}")
+                logger.info(f"Cleaned temp directory for job {job_id}")
 
                 await QueueService.release_active_job(job_id, queue_type=job.queue_type)
                 await QueueService.release_cache_lock(job.cache_key)

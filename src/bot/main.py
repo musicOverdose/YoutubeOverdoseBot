@@ -60,12 +60,13 @@ async def read_authoritative_config() -> Tuple[str, str]:
     Read mode and version directly from PostgreSQL (authoritative source).
     Falls back to Redis derived cache if PostgreSQL is temporarily unavailable.
     """
+    default_mode = getattr(settings, "TELEGRAM_API_MODE", "cloud")
     try:
         async with AsyncSessionLocal() as session:
             stmt = select(Setting).where(Setting.status == "ACTIVE")
             res = await session.execute(stmt)
             items = {s.key: s.value for s in res.scalars().all()}
-            mode = items.get("telegram_api_mode") or "local"
+            mode = items.get("telegram_api_mode") or default_mode
             version = items.get("telegram_config_version") or "1"
             return mode, version
     except Exception as e:
@@ -74,11 +75,11 @@ async def read_authoritative_config() -> Tuple[str, str]:
             r = get_redis_client()
             m = await r.get("telegram:active:mode")
             v = await r.get("telegram:active:config_version")
-            mode = m.decode() if isinstance(m, bytes) else (str(m) if m else "local")
+            mode = m.decode() if isinstance(m, bytes) else (str(m) if m else default_mode)
             version = v.decode() if isinstance(v, bytes) else (str(v) if v else "1")
             return mode, version
         except Exception:
-            return "local", "1"
+            return default_mode, "1"
 
 
 async def wait_for_readiness() -> None:
@@ -237,7 +238,7 @@ async def main() -> None:
             )
 
             session = AiohttpSession(
-                api=TelegramAPIServer.from_base(endpoint, is_local=is_local)
+                api=TelegramAPIServer.from_base(endpoint, is_local=False)
             )
 
             bot = Bot(

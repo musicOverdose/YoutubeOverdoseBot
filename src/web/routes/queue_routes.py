@@ -91,6 +91,16 @@ async def resume_queue(
     return {"status": "resumed"}
 
 
+@router.post("/clear")
+async def clear_queue(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Transaction-safe clearing of queued jobs."""
+    result = await QueueService.clear_queued_jobs(session, admin_username=admin["sub"])
+    return result
+
+
 from src.services.setting_service import SETTING_MAX_ACTIVE_JOBS, SettingService
 
 

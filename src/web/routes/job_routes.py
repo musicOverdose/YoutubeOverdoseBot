@@ -1,10 +1,13 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.core.constants import JobStatus
 from src.core.database import get_db
 from src.models.job import Job
 from src.models.job_request import JobRequest
+from src.services.audit_service import AuditService
+from src.services.queue_service import QueueService
 from src.web.auth import get_current_admin
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
@@ -107,3 +110,51 @@ async def get_job_detail(
             for r in requests
         ],
     }
+
+
+@router.post("/clear")
+async def clear_jobs(
+    scope: str = Query(default="finished", description="Scope: 'finished' (completed, failed, cancelled) or 'all' (all non-active)"),
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """
+    Clears jobs from database history.
+    Strict Invariant: NEVER deletes active or processing jobs!
+    """
+    active_ids = set(await QueueService.get_active_job_ids())
+    active_statuses = [
+        JobStatus.PREPARING.value,
+        JobStatus.DOWNLOADING.value,
+        JobStatus.PROCESSING.value,
+        JobStatus.UPLOADING.value,
+    ]
+    if scope == "finished":
+        target_statuses = [JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value]
+    else:
+        # All non-active jobs
+        target_statuses = [JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value, JobStatus.PENDING.value]
+
+    stmt = select(Job.id).where(
+        Job.status.in_(target_statuses),
+        Job.status.not_in(active_statuses),
+    )
+    if active_ids:
+        stmt = stmt.where(Job.id.not_in(active_ids))
+
+    res = await session.execute(stmt)
+    job_ids = res.scalars().all()
+
+    count = len(job_ids)
+    if count > 0:
+        await session.execute(delete(Job).where(Job.id.in_(job_ids)))
+        await session.commit()
+
+        await AuditService.log_action(
+            session,
+            "JOBS_CLEAR",
+            admin.get("sub", "admin"),
+            f"Cleared {count} jobs from history (scope={scope})",
+        )
+
+    return {"status": "cleared", "count": count, "scope": scope}

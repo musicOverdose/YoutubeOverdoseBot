@@ -79,35 +79,3 @@ async def test_system_service_aggregates_service_reported_telemetry():
     assert stats["disk_free_gb"] == 50.0
     assert stats["disk_total_gb"] == 80.0
 
-
-def test_local_bot_api_telemetry_service():
-    from unittest.mock import MagicMock
-    from src.telemetry.local_bot_api import collect_and_publish_metrics, get_dir_size
-
-    tmp = tempfile.mkdtemp()
-    try:
-        data_dir = os.path.join(tmp, "data")
-        temp_dir = os.path.join(tmp, "temp")
-        os.makedirs(data_dir, exist_ok=True)
-        os.makedirs(temp_dir, exist_ok=True)
-
-        with open(os.path.join(data_dir, "test1.dat"), "wb") as f:
-            f.write(b"1" * 5000)
-
-        with open(os.path.join(temp_dir, "test2.dat"), "wb") as f:
-            f.write(b"2" * 3000)
-
-        assert get_dir_size(data_dir) == 5000
-        assert get_dir_size(temp_dir) == 3000
-        assert get_dir_size(os.path.join(tmp, "nonexistent")) == 0
-
-        mock_redis = MagicMock()
-        data_bytes, temp_bytes = collect_and_publish_metrics(mock_redis, data_dir, temp_dir)
-
-        assert data_bytes == 5000
-        assert temp_bytes == 3000
-        mock_redis.set.assert_any_call("telemetry:local_bot_api:data_bytes", "5000")
-        mock_redis.set.assert_any_call("telemetry:local_bot_api:temp_bytes", "3000")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-

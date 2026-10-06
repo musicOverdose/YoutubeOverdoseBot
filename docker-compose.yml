@@ -67,46 +67,10 @@ services:
       - web_secrets:/config/master:rw
       - bot_runtime_secrets:/config/runtime:rw
       - bot_runtime_state:/config/state:rw
-      - local_api_config:/config/bot-api:rw
       - cookie_secrets:/config/secrets:rw
     networks:
-      ytdl_network:
-        aliases:
-          - ytdl_web
-
-  telegram-bot-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.localbotapi
-    container_name: ytdl_local_bot_api
-    restart: unless-stopped
-    user: "101:101"
-    volumes:
-      - local_api_config:/config/bot-api:ro
-      - telegram_upload_tmp:/transfer:ro
-      - telegram_bot_api_temp:/tmp/telegram-bot-api:rw
-      - telegram_bot_api_data:/var/lib/telegram-bot-api:rw
-    networks:
       - ytdl_network
-
-  telegram-bot-api-telemetry:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: base
-    container_name: ytdl_local_bot_api_telemetry
-    restart: unless-stopped
-    environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-    volumes:
-      - telegram_bot_api_temp:/tmp/telegram-bot-api:ro
-      - telegram_bot_api_data:/var/lib/telegram-bot-api:ro
-    command: ["python3", "-m", "src.telemetry.local_bot_api"]
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - ytdl_network
+      - telegram-bots
 
   bot:
     build:
@@ -134,6 +98,7 @@ services:
         condition: service_started
     networks:
       - ytdl_network
+      - telegram-bots
 
   worker:
     build:
@@ -153,7 +118,6 @@ services:
       - bot_runtime_state:/config/state:ro
       - cookie_secrets:/config/secrets:ro
       - temp_data:/tmp/ytdl:rw
-      - telegram_upload_tmp:/transfer:rw
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,10 +125,13 @@ services:
         condition: service_healthy
     networks:
       - ytdl_network
+      - telegram-bots
 
 networks:
   ytdl_network:
     driver: bridge
+  telegram-bots:
+    external: true
 
 volumes:
   postgres_data:
@@ -172,9 +139,5 @@ volumes:
   web_secrets:
   bot_runtime_secrets:
   bot_runtime_state:
-  local_api_config:
   cookie_secrets:
-  telegram_upload_tmp:
-  telegram_bot_api_temp:
-  telegram_bot_api_data:
   temp_data:

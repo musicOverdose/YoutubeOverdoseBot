@@ -125,14 +125,8 @@ def test_atomic_file_writers(temp_config_dir):
     token_mode = oct(os.stat(temp_config_dir["token"]).st_mode & 0o777)
     assert token_mode == "0o640"
 
+    # write_local_bot_api_env is a safe no-op in decoupled mode
     write_local_bot_api_env(98765, "abcdef0123456789abcdef0123456789")
-    assert os.path.exists(temp_config_dir["env"])
-    with open(temp_config_dir["env"], "r") as f:
-        content = f.read()
-        assert "API_ID=98765" in content
-        assert "API_HASH=abcdef0123456789abcdef0123456789" in content
-    env_mode = oct(os.stat(temp_config_dir["env"]).st_mode & 0o777)
-    assert env_mode == "0o640"
 
     write_runtime_ready()
     assert os.path.exists(temp_config_dir["ready"])
@@ -141,10 +135,8 @@ def test_atomic_file_writers(temp_config_dir):
     ready_mode = oct(os.stat(temp_config_dir["ready"]).st_mode & 0o777)
     assert ready_mode == "0o644"
 
+    # write_restart_trigger is a safe no-op in decoupled mode
     write_restart_trigger()
-    assert os.path.exists(temp_config_dir["trigger"])
-    trigger_mode = oct(os.stat(temp_config_dir["trigger"]).st_mode & 0o777)
-    assert trigger_mode == "0o640"
 
 
 # 4. Non-Blocking Advisory Lock (pg_try_advisory_lock / HTTP 409 Conflict)
@@ -179,11 +171,9 @@ async def test_save_telegram_config_local_mode_validation_failure(temp_config_di
             await SettingService.save_telegram_config(
                 candidate_mode="local",
                 bot_token="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ",
-                api_id=123456,
-                api_hash="0123456789abcdef0123456789abcdef",
             )
         assert exc.value.status_code == 400
-        assert "rolled back" in exc.value.detail
+        assert "Active configuration remains unchanged" in exc.value.detail or "rejected" in exc.value.detail
 
     # Verify PENDING was deleted from DB (rollback)
     stmt = select(Setting).where(Setting.status == "PENDING")
@@ -202,8 +192,6 @@ async def test_save_telegram_config_local_mode_success(temp_config_dir, db_sessi
         res = await SettingService.save_telegram_config(
             candidate_mode="local",
             bot_token="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ",
-            api_id=123456,
-            api_hash="0123456789abcdef0123456789abcdef",
             cache_channel_id="-1001234567890",
         )
 
@@ -221,8 +209,6 @@ async def test_save_telegram_config_local_mode_success(temp_config_dir, db_sessi
     assert active_map[SETTING_BOT_TOKEN].is_encrypted is True
     assert SETTING_API_MODE in active_map
     assert active_map[SETTING_API_MODE].value == "local"
-    assert SETTING_API_ID in active_map
-    assert active_map[SETTING_API_ID].value == "123456"
 
     # Verify runtime bot-token file written with mode 0640
     assert os.path.exists(temp_config_dir["token"])
@@ -270,18 +256,6 @@ async def test_reconcile_startup_state(temp_config_dir, db_session):
             value="local",
             is_encrypted=False,
         ),
-        Setting(
-            key=SETTING_API_ID,
-            status="ACTIVE",
-            value="55555",
-            is_encrypted=False,
-        ),
-        Setting(
-            key=SETTING_API_HASH,
-            status="ACTIVE",
-            value=encrypt_credential("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", key),
-            is_encrypted=True,
-        ),
         # Stale PENDING record that must be pruned
         Setting(
             key=SETTING_BOT_TOKEN,
@@ -304,13 +278,6 @@ async def test_reconcile_startup_state(temp_config_dir, db_session):
     assert os.path.exists(temp_config_dir["token"])
     with open(temp_config_dir["token"]) as f:
         assert f.read().strip() == "123456789:ReconciledToken12345"
-
-    # Verify /config/bot-api/local-bot-api.env reconstructed
-    assert os.path.exists(temp_config_dir["env"])
-    with open(temp_config_dir["env"]) as f:
-        env_text = f.read()
-        assert "API_ID=55555" in env_text
-        assert "API_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in env_text
 
     # Verify /config/state/READY was created with mode 0644
     assert os.path.exists(temp_config_dir["ready"])
@@ -436,24 +403,20 @@ async def test_candidate_failure_rollback_waits_for_readiness_and_restores_ready
             await SettingService.save_telegram_config(
                 candidate_mode="local",
                 bot_token=candidate_token,
-                api_id=22222,
-                api_hash="22222222222222222222222222222222",
             )
         assert exc.value.status_code == 400
-        assert "rolled back to previous configuration" in exc.value.detail
+        assert "Active configuration remains unchanged" in exc.value.detail
 
-    # Restored configuration verified: READY must be re-armed
+    # Restored configuration verified: READY remains armed and token remains unchanged
     assert os.path.exists(temp_config_dir["ready"])
-    # Runtime bot-token restored to existing active token
     with open(temp_config_dir["token"]) as f:
         assert f.read().strip() == "100:ExistingActiveToken12345"
 
 
 @pytest.mark.asyncio
-async def test_candidate_failure_rollback_failure_leaves_ready_absent_halted(temp_config_dir, db_session):
+async def test_candidate_failure_preserves_active_configuration(temp_config_dir, db_session):
     """
-    CRITICAL Correction 3:
-    If rollback cannot verify restored runtime, leave READY absent and report system as halted.
+    Decoupled architecture: Candidate failure leaves active configuration completely unchanged.
     """
     key = await get_master_key(db_session)
 
@@ -463,12 +426,10 @@ async def test_candidate_failure_rollback_failure_leaves_ready_absent_halted(tem
         await SettingService.save_telegram_config(
             candidate_mode="local",
             bot_token="100:ExistingActiveToken12345",
-            api_id=11111,
-            api_hash="11111111111111111111111111111111",
         )
     assert os.path.exists(temp_config_dir["ready"])
 
-    # 2. Both candidate and rollback fail
+    # 2. Candidate fails
     with patch.object(SettingService, "LOCAL_API_POLL_TIMEOUT", 0.1), \
          patch.object(SettingService, "LOCAL_API_POLL_INTERVAL", 0.02), \
          patch.object(SettingService, "poll_local_api_readiness", AsyncMock(return_value=(False, None, "Total server outage"))):
@@ -477,19 +438,19 @@ async def test_candidate_failure_rollback_failure_leaves_ready_absent_halted(tem
             await SettingService.save_telegram_config(
                 candidate_mode="local",
                 bot_token="300:NewFailingToken123456789",
-                api_id=33333,
-                api_hash="33333333333333333333333333333333",
             )
         assert exc.value.status_code == 400
+        assert "Active configuration remains unchanged" in exc.value.detail
 
-    # System halted: READY must NOT be present!
-    assert not os.path.exists(temp_config_dir["ready"])
+    # Active READY and token still intact
+    assert os.path.exists(temp_config_dir["ready"])
+    with open(temp_config_dir["token"]) as f:
+        assert f.read().strip() == "100:ExistingActiveToken12345"
 
 
 @pytest.mark.asyncio
 async def test_fresh_install_candidate_failure_cleans_up_artifacts(temp_config_dir, db_session):
     """
-    CRITICAL Correction 3:
     Clean up failed candidate runtime artifacts on fresh installations
     where there is no previous ACTIVE configuration.
     """
@@ -507,14 +468,10 @@ async def test_fresh_install_candidate_failure_cleans_up_artifacts(temp_config_d
             await SettingService.save_telegram_config(
                 candidate_mode="local",
                 bot_token="400:FreshInstallToken123456789",
-                api_id=44444,
-                api_hash="44444444444444444444444444444444",
             )
         assert exc.value.status_code == 400
 
     # Verify candidate runtime artifacts were cleanly purged
     assert not os.path.exists(temp_config_dir["ready"])
     assert not os.path.exists(temp_config_dir["token"])
-    assert not os.path.exists(temp_config_dir["env"])
-    assert not os.path.exists(temp_config_dir["trigger"])
 

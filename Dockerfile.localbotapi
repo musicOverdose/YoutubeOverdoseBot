@@ -1,6 +1,0 @@
-FROM aiogram/telegram-bot-api:10.3
-
-COPY scripts/run_telegram_bot_api.sh /usr/local/bin/run_telegram_bot_api.sh
-RUN chmod 755 /usr/local/bin/run_telegram_bot_api.sh
-
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/run_telegram_bot_api.sh"]

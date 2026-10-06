@@ -89,9 +89,9 @@ class WorkerRecovery:
             except Exception as e:
                 logger.error(f"Error during temp directory cleanup: {e}")
 
-        # 5. Clean transfer staging directory /transfer/
-        transfer_dir = settings.TRANSFER_DIR
-        if os.path.exists(transfer_dir):
+        # 5. Clean transfer staging directory if configured
+        transfer_dir = getattr(settings, "TRANSFER_DIR", None)
+        if transfer_dir and os.path.exists(transfer_dir):
             try:
                 for item in os.listdir(transfer_dir):
                     item_path = os.path.join(transfer_dir, item)

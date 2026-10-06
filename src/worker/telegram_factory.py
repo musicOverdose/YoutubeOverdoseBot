@@ -43,17 +43,17 @@ class TelegramClientFactory:
                         else str(cached_mode)
                     )
                 else:
-                    mode = "local"
+                    mode = getattr(settings, "TELEGRAM_API_MODE", "cloud")
             except Exception as e:
                 logger.debug("Could not read telegram mode from Redis: %s", e)
-                mode = "local"
+                mode = getattr(settings, "TELEGRAM_API_MODE", "cloud")
 
         if mode == "local":
-            base_url = settings.TELEGRAM_API_BASE_URL
-            if not base_url or "api.telegram.org" in base_url:
+            base_url = (getattr(settings, "TELEGRAM_API_BASE_URL", "") or "").rstrip("/")
+            if not base_url or base_url == "https://api.telegram.org":
                 base_url = "http://telegram-bot-api:8081"
             session = AiohttpSession(
-                api=TelegramAPIServer.from_base(base_url, is_local=True)
+                api=TelegramAPIServer.from_base(base_url, is_local=False)
             )
         else:
             session = AiohttpSession(

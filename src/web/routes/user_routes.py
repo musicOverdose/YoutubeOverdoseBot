@@ -108,3 +108,26 @@ async def update_user_role(
     await session.commit()
     await AuditService.log_action(session, "USER_ROLE_CHANGE", admin["sub"], f"User {user_id} role set to {req.role}")
     return {"status": "updated", "user_id": user_id, "new_role": req.role}
+
+
+@router.delete("/{user_id}")
+async def delete_user(
+    user_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Permanently delete user and their associated records from the database."""
+    stmt = select(User).where(User.id == user_id)
+    res = await session.execute(stmt)
+    user = res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    username = user.username or user.first_name or str(user.id)
+    await session.delete(user)
+    await session.commit()
+    admin_user = admin.get("username") or admin.get("sub", "admin")
+    await AuditService.log_action(
+        session, "USER_DELETE", admin_user, f"Deleted user {user_id} (@{username})"
+    )
+    return {"status": "deleted", "user_id": user_id}

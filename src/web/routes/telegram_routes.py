@@ -12,22 +12,22 @@ router = APIRouter(prefix="/api/telegram", tags=["Telegram"])
 
 
 class TelegramConfigRequest(BaseModel):
-    mode: str = "local"
+    mode: str = "cloud"
     bot_token: Optional[str] = None
-    api_id: Optional[Union[int, str]] = None
-    api_hash: Optional[str] = None
+    api_id: Optional[Union[int, str]] = None  # Deprecated / ignored
+    api_hash: Optional[str] = None  # Deprecated / ignored
     cache_channel_id: Optional[Union[int, str]] = None
 
 
 class TestTokenRequest(BaseModel):
     bot_token: Optional[str] = None
-    mode: str = "local"
+    mode: str = "cloud"
 
 
 class TestChannelRequest(BaseModel):
     channel_id: Union[int, str]
     bot_token: Optional[str] = None
-    mode: str = "local"
+    mode: str = "cloud"
 
 
 class MigrationRequest(BaseModel):
@@ -80,10 +80,11 @@ async def test_bot_token(
 @router.post("/test-local-api")
 async def test_local_bot_api(admin: dict = Depends(get_current_admin)):
     """Probe TCP connectivity to Local Bot API container on port 8081."""
+    endpoint = SettingService.derive_endpoint("local")
     host = "telegram-bot-api"
     port = 8081
     try:
-        base_clean = settings.TELEGRAM_API_BASE_URL.split("://")[-1]
+        base_clean = endpoint.split("://")[-1]
         parts = base_clean.split(":")
         host = parts[0]
         if len(parts) > 1:
@@ -95,7 +96,7 @@ async def test_local_bot_api(admin: dict = Depends(get_current_admin)):
     if not connected:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot reach Local Bot API at {host}:{port}. Ensure the local-bot-api service is running.",
+            detail=f"Cannot reach Local Bot API at {host}:{port}. Ensure the centralized Local Bot API server is running on the 'telegram-bots' network.",
         )
     return {"connected": True, "host": host, "port": port}
 

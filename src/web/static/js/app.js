@@ -210,6 +210,24 @@ async function cancelJob(id) {
   }
 }
 
+async function clearQueue() {
+  const confirmed = await showConfirm(
+    'Are you sure you want to cancel all waiting jobs and clear the queue? Currently active/processing jobs will NOT be interrupted.',
+    'Clear Queue',
+    'Clear Queue',
+    'btn-danger'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await API.post('/api/queue/clear', {});
+    toastSuccess(res.message || `Cleared ${res.cancelled_jobs_count || 0} queued jobs`, 'Queue Cleared');
+    loadQueue();
+  } catch (err) {
+    toastError(err.message || 'Failed to clear queue', 'Error');
+  }
+}
+
 // 3. JOBS
 async function loadJobs() {
   const search = document.getElementById('jobs-search')?.value || '';
@@ -241,6 +259,24 @@ async function loadJobs() {
 async function retryJob(id) {
   await API.post(`/api/queue/retry/${id}`, {});
   loadJobs();
+}
+
+async function clearJobs() {
+  const confirmed = await showConfirm(
+    'Are you sure you want to clear finished job history (completed, failed, cancelled)? Active and queued jobs will NOT be deleted.',
+    'Clear Job History',
+    'Clear Jobs',
+    'btn-danger'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await API.post('/api/jobs/clear', {});
+    toastSuccess(res.message || `Deleted ${res.deleted_jobs_count || 0} finished jobs`, 'Jobs Cleared');
+    loadJobs();
+  } catch (err) {
+    toastError(err.message || 'Failed to clear jobs', 'Error');
+  }
 }
 
 // 4. CACHE
@@ -377,6 +413,7 @@ async function loadUsers() {
                   ? `<button class="btn btn-danger btn-sm" onclick="setUserStatus(${u.id}, 'BANNED')">Ban</button>`
                   : `<button class="btn btn-success btn-sm" onclick="setUserStatus(${u.id}, 'ACTIVE')">Unban</button>`}
                 ${wlBtn}
+                <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username || '')}')" title="Delete User">Delete</button>
               </div>
             </td>
           </tr>
@@ -389,6 +426,25 @@ async function loadUsers() {
 async function setUserStatus(id, st) {
   await API.post(`/api/users/${id}/status`, { status: st });
   loadUsers();
+}
+
+async function deleteUser(id, username) {
+  const label = username ? `@${username} (${id})` : `User ${id}`;
+  const confirmed = await showConfirm(
+    `Are you sure you want to permanently delete ${label} and all associated records from the database? This cannot be undone.`,
+    'Delete User',
+    'Delete Permanently',
+    'btn-danger'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await API.delete(`/api/users/${id}`);
+    toastSuccess(res.message || 'User deleted successfully', 'User Deleted');
+    loadUsers();
+  } catch (err) {
+    toastError(err.message || 'Failed to delete user', 'Error');
+  }
 }
 
 async function loadUsersWhitelist() {
@@ -852,7 +908,7 @@ async function loadTelegramConfig() {
     }
     onTelegramModeChange();
 
-    document.getElementById('tg-derived-endpoint').value         = data.derived_endpoint || 'http://telegram-bot-api:8081';
+    document.getElementById('tg-derived-endpoint').value = data.derived_endpoint || (data.mode === 'local' ? 'http://telegram-bot-api:8081' : 'https://api.telegram.org');
 
     const tokenInput = document.getElementById('tg-bot-token');
     const tokenDisplay = document.getElementById('tg-token-masked-display');
@@ -862,20 +918,6 @@ async function loadTelegramConfig() {
     } else {
       tokenDisplay.textContent = 'Not Set';
       if (tokenInput) tokenInput.placeholder = '123456789:ABCdefGHIjklMNOpqrSTUvwxYZ';
-    }
-
-    document.getElementById('tg-api-id').value                   = data.api_id ? String(data.api_id) : '';
-    const idDisplay = document.getElementById('tg-id-display');
-    if (idDisplay) idDisplay.textContent = data.api_id ? String(data.api_id) : 'Not Set';
-
-    const hashInput = document.getElementById('tg-api-hash');
-    const hashDisplay = document.getElementById('tg-hash-masked-display');
-    if (data.api_hash_masked) {
-      hashDisplay.textContent = `Configured · ${data.api_hash_masked} — Leave blank to keep existing value`;
-      if (hashInput) hashInput.placeholder = 'Leave blank to keep existing value';
-    } else {
-      hashDisplay.textContent = 'Not Set';
-      if (hashInput) hashInput.placeholder = '0123456789abcdef0123456789abcdef';
     }
 
     document.getElementById('tg-cache-channel').value             = data.cache_channel_id || '';
@@ -920,10 +962,10 @@ async function loadTelegramConfig() {
     try {
       const sysData = await API.get('/api/system');
       if (sysData.stats) {
-        document.getElementById('stat-transfer-usage').textContent = `${Math.round(sysData.stats.worker_transfer_gb * 1024)} MB`;
-        document.getElementById('stat-worker-temp').textContent    = `${Math.round(sysData.stats.worker_temp_gb * 1024)} MB`;
-        document.getElementById('stat-botapi-data').textContent    = `${Math.round(sysData.stats.bot_api_data_gb * 1024)} MB`;
-        document.getElementById('stat-host-free').textContent      = `${sysData.stats.disk_free_gb} GB`;
+        const workerTempEl = document.getElementById('stat-worker-temp');
+        if (workerTempEl) workerTempEl.textContent = `${Math.round(sysData.stats.worker_temp_gb * 1024)} MB`;
+        const hostFreeEl = document.getElementById('stat-host-free');
+        if (hostFreeEl) hostFreeEl.textContent = `${sysData.stats.disk_free_gb} GB`;
       }
     } catch (e) {}
   } catch (err) {
@@ -932,15 +974,12 @@ async function loadTelegramConfig() {
 }
 
 function onTelegramModeChange() {
-  const selectedMode = document.querySelector('input[name="tg-mode-radio"]:checked')?.value || 'local';
-  const localGroup   = document.getElementById('tg-local-credentials-group');
+  const selectedMode = document.querySelector('input[name="tg-mode-radio"]:checked')?.value || 'cloud';
   const endpointInput = document.getElementById('tg-derived-endpoint');
 
   if (selectedMode === 'local') {
-    if (localGroup)    localGroup.style.display = 'block';
-    if (endpointInput) endpointInput.value = 'http://telegram-bot-api:8081';
+    if (endpointInput) endpointInput.value = currentTelegramConfig.local_base_url || 'http://telegram-bot-api:8081';
   } else {
-    if (localGroup)    localGroup.style.display = 'none';
     if (endpointInput) endpointInput.value = 'https://api.telegram.org';
   }
 }
@@ -961,17 +1000,13 @@ async function saveTelegramConfig() {
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving…';
 
-  const mode         = document.querySelector('input[name="tg-mode-radio"]:checked')?.value || 'local';
+  const mode         = document.querySelector('input[name="tg-mode-radio"]:checked')?.value || 'cloud';
   const token        = document.getElementById('tg-bot-token').value.trim();
-  const apiId        = document.getElementById('tg-api-id').value.trim();
-  const apiHash      = document.getElementById('tg-api-hash').value.trim();
   const cacheChannel = document.getElementById('tg-cache-channel').value.trim();
 
   const payload = {
     mode,
     bot_token:        token || undefined,
-    api_id:           apiId ? parseInt(apiId, 10) : undefined,
-    api_hash:         apiHash || undefined,
     cache_channel_id: cacheChannel || undefined,
   };
 
@@ -980,7 +1015,6 @@ async function saveTelegramConfig() {
     showAlert('telegram-alert', res.message, 'success');
     toastSuccess(res.message, 'Telegram Saved');
     document.getElementById('tg-bot-token').value = '';
-    document.getElementById('tg-api-hash').value  = '';
     await loadTelegramConfig();
   } catch (err) {
     if (err.message && err.message.includes('Conflict')) {
@@ -1041,11 +1075,11 @@ function openMigrationModal(targetMode) {
   const descEl  = document.getElementById('migration-desc');
 
   if (targetMode === 'local') {
-    if (warnEl) warnEl.textContent = 'Migrating from Cloud to Local Bot API calls logOut() on Telegram Cloud. Returning to Cloud API is blocked by Telegram for 10 minutes following that operation.';
-    if (descEl) descEl.textContent = 'This will log out the cloud session, verify Local Bot API server connectivity, and transition all polling and file uploads to the internal Local Bot API server (up to 2000 MB).';
+    if (warnEl) warnEl.textContent = 'Switching to centralized Local Bot API will route requests to the external Local Bot API stack (http://telegram-bot-api:8081) on network telegram-bots.';
+    if (descEl) descEl.textContent = 'This enables up to 2000 MB file uploads. Note: If this bot was previously logged into a local server, ensure it was properly logged out first.';
   } else {
-    if (warnEl) warnEl.textContent = 'Cloud Bot API limits uploads to 50 MB. Local Bot API will enter standby mode.';
-    if (descEl) descEl.textContent = 'This will transition the bot session to Telegram Cloud API (https://api.telegram.org). Any media file exceeding 50 MB will be rejected.';
+    if (warnEl) warnEl.textContent = 'Cloud Bot API limits uploads to 50 MB.';
+    if (descEl) descEl.textContent = 'This will transition the bot session to official Telegram Cloud API (https://api.telegram.org). Any media file exceeding 50 MB will be rejected.';
   }
 
   modal.classList.add('active');

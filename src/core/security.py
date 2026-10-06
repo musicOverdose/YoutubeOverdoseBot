@@ -256,17 +256,10 @@ def write_runtime_bot_token(token: str) -> None:
 
 def write_local_bot_api_env(api_id: Union[str, int], api_hash: str) -> None:
     """
-    Write candidate/active Local Bot API env file.
-    Permissions: mode 0640, group 101 (telegram-bot-api).
-    Content strictly contains API_ID and API_HASH.
+    Deprecated: Centralized Telegram Bot API server does not require local env writing.
+    Preserved as no-op for backward compatibility.
     """
-    content = f"API_ID={api_id}\nAPI_HASH={api_hash.strip()}\n"
-    atomic_write_file(
-        path=settings.LOCAL_BOT_API_ENV_FILE,
-        content=content,
-        mode=0o640,
-        group=101,
-    )
+    pass
 
 
 def write_runtime_ready() -> None:
@@ -311,18 +304,13 @@ def remove_runtime_ready() -> None:
 def verify_runtime_artifacts(mode: str = "cloud") -> bool:
     """
     Verify required runtime artifacts exist, have non-zero size, and proper permissions.
+    Centralized Bot API requires strictly the bot-token runtime file.
     """
     try:
         bot_token_file = Path(settings.RUNTIME_BOT_TOKEN_FILE)
         if not bot_token_file.is_file() or bot_token_file.stat().st_size == 0:
             logger.warning("Runtime bot token file %s missing or empty", bot_token_file)
             return False
-
-        if mode == "local":
-            env_file = Path(settings.LOCAL_BOT_API_ENV_FILE)
-            if not env_file.is_file() or env_file.stat().st_size == 0:
-                logger.warning("Local Bot API env file %s missing or empty", env_file)
-                return False
 
         return True
     except Exception as e:
@@ -342,14 +330,7 @@ def remove_runtime_bot_token() -> None:
 
 
 def remove_local_bot_api_artifacts() -> None:
-    """Clean up candidate Local Bot API env file and trigger if present."""
-    for filepath in [settings.LOCAL_BOT_API_ENV_FILE, settings.LOCAL_BOT_API_TRIGGER_FILE]:
-        try:
-            p = Path(filepath)
-            if p.is_file():
-                p.unlink()
-                logger.info("Unlinked %s", filepath)
-        except Exception as e:
-            logger.warning("Could not remove %s: %s", filepath, e)
+    """Deprecated: Centralized Telegram Bot API server does not require local env cleanup."""
+    pass
 
 

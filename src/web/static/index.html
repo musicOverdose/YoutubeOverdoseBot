@@ -305,6 +305,10 @@
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
               Pause Queue
             </button>
+            <button class="btn btn-danger" id="btn-queue-clear" onclick="clearQueue()">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Clear Queue
+            </button>
             <label class="flex items-center gap-2 font-sm text-secondary" style="white-space:nowrap; margin:0;">
               Max Concurrency:
               <input type="number" id="queue-max-active-input" min="1" max="8" style="width:64px;">
@@ -374,6 +378,10 @@
               <option value="CANCELLED">Cancelled</option>
               <option value="QUEUED">Queued</option>
             </select>
+            <button class="btn btn-danger" id="btn-jobs-clear" onclick="clearJobs()">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Clear Jobs
+            </button>
           </div>
         </div>
 
@@ -603,17 +611,17 @@
               <label>Operating Mode:</label>
               <div class="radio-group">
                 <label class="radio-option">
-                  <input type="radio" name="tg-mode-radio" value="local" checked onchange="onTelegramModeChange()">
+                  <input type="radio" name="tg-mode-radio" value="cloud" checked onchange="onTelegramModeChange()">
                   <div>
-                    <div class="radio-option__label">Local Bot API Server</div>
-                    <div class="radio-option__desc">Standard production — up to 2000 MB file uploads</div>
+                    <div class="radio-option__label">Cloud Bot API</div>
+                    <div class="radio-option__desc">Default — 50 MB upload limit (https://api.telegram.org)</div>
                   </div>
                 </label>
                 <label class="radio-option">
-                  <input type="radio" name="tg-mode-radio" value="cloud" onchange="onTelegramModeChange()">
+                  <input type="radio" name="tg-mode-radio" value="local" onchange="onTelegramModeChange()">
                   <div>
-                    <div class="radio-option__label">Cloud Bot API</div>
-                    <div class="radio-option__desc">Diagnostic / fallback — 50 MB upload limit</div>
+                    <div class="radio-option__label">Centralized Local Bot API Server</div>
+                    <div class="radio-option__desc">Standard production — up to 2000 MB file uploads</div>
                   </div>
                 </label>
               </div>
@@ -621,8 +629,8 @@
 
             <!-- Derived endpoint -->
             <div class="form-group">
-              <label for="tg-derived-endpoint">Derived Bot API Endpoint:</label>
-              <input type="text" id="tg-derived-endpoint" value="http://telegram-bot-api:8081" readonly aria-readonly="true">
+              <label for="tg-derived-endpoint">Bot API Endpoint:</label>
+              <input type="text" id="tg-derived-endpoint" value="https://api.telegram.org" readonly aria-readonly="true">
             </div>
 
             <!-- Bot token -->
@@ -635,26 +643,6 @@
                 </button>
               </div>
               <div class="field-hint">Current active token: <span id="tg-token-masked-display" class="font-mono">Not Set</span></div>
-            </div>
-
-            <!-- Local credentials (API ID / hash) -->
-            <div id="tg-local-credentials-group">
-              <div class="form-group">
-                <label for="tg-api-id">Telegram API ID (from my.telegram.org):</label>
-                <input type="number" id="tg-api-id" placeholder="12345678">
-                <div class="field-hint">Current active ID: <span id="tg-id-display" class="font-mono">Not Set</span></div>
-              </div>
-
-              <div class="form-group">
-                <label for="tg-api-hash">Telegram API Hash (32 hex chars):</label>
-                <div class="input-with-btn">
-                  <input type="password" id="tg-api-hash" placeholder="0123456789abcdef0123456789abcdef" autocomplete="off">
-                  <button type="button" class="btn btn-secondary btn-icon" onclick="toggleInputMask('tg-api-hash')" aria-label="Toggle hash visibility">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                  </button>
-                </div>
-                <div class="field-hint">Current active hash: <span id="tg-hash-masked-display" class="font-mono">Not Set</span></div>
-              </div>
             </div>
 
             <!-- Cache channel -->
@@ -701,19 +689,11 @@
             </div>
 
             <hr class="card-divider">
-            <div class="card__title mb-3" style="font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em;">Isolated Storage Telemetry</div>
+            <div class="card__title mb-3" style="font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em;">Storage Telemetry</div>
 
-            <div class="info-row">
-              <span class="info-row__key">Worker Staging (<code>/transfer</code>)</span>
-              <span class="info-row__val font-mono" id="stat-transfer-usage">0 MB</span>
-            </div>
             <div class="info-row">
               <span class="info-row__key">Worker Scratch (<code>/tmp/ytdl</code>)</span>
               <span class="info-row__val font-mono" id="stat-worker-temp">0 MB</span>
-            </div>
-            <div class="info-row">
-              <span class="info-row__key">Local Bot API Data</span>
-              <span class="info-row__val font-mono" id="stat-botapi-data">0 MB</span>
             </div>
             <div class="info-row">
               <span class="info-row__key">Host Free Space</span>

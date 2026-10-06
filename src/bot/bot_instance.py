@@ -38,11 +38,10 @@ def get_bot() -> Bot:
             )
 
         from src.services.setting_service import SettingService
-        mode = getattr(settings, "TELEGRAM_API_MODE", "local")
+        mode = getattr(settings, "TELEGRAM_API_MODE", "cloud")
         endpoint = SettingService.derive_endpoint(mode)
-        is_local = (mode == "local")
         session = AiohttpSession(
-            api=TelegramAPIServer.from_base(endpoint, is_local=is_local)
+            api=TelegramAPIServer.from_base(endpoint, is_local=False)
         )
         _bot = Bot(
             token=token,

@@ -1,7 +1,7 @@
 import json
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import redis.asyncio as aioredis
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.core.constants import (
@@ -339,3 +339,79 @@ class QueueService:
             return False, f"⚠️ You have reached the maximum allowed concurrent/queued jobs limit ({active_or_queued_count}). Please wait for your current tasks to finish."
 
         return True, None
+
+    @classmethod
+    async def clear_queued_jobs(
+        cls, session: AsyncSession, admin_username: str = "admin"
+    ) -> Dict[str, Any]:
+        """
+        Transaction-safe queue clearing:
+        1. Identify queued job IDs from Redis FIFO queues and DB.
+        2. Filter out any job that is currently active/processing.
+        3. Within PostgreSQL transaction, mark identified queued jobs as CANCELLED.
+        4. Atomically drain Redis queue lists and delete queue mapping keys.
+        5. Record audit log.
+        Guarantees that active processing jobs are NEVER cancelled or deleted.
+        """
+        r = get_redis_client()
+        active_ids = set(await cls.get_active_job_ids())
+
+        # Collect all IDs from Redis queues
+        raw_v = [m.decode() if isinstance(m, bytes) else str(m) for m in await r.lrange(REDIS_KEY_QUEUE_VIDEO, 0, -1)]
+        raw_s = [m.decode() if isinstance(m, bytes) else str(m) for m in await r.lrange(REDIS_KEY_QUEUE_SUBTITLE, 0, -1)]
+        raw_l = [m.decode() if isinstance(m, bytes) else str(m) for m in await r.lrange(REDIS_KEY_QUEUE, 0, -1)]
+        redis_queued_ids = set(raw_v) | set(raw_s) | set(raw_l)
+
+        # Also find any jobs in DB marked as QUEUED or PENDING
+        stmt = select(Job.id).where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.PENDING.value]))
+        res = await session.execute(stmt)
+        db_queued_ids = set(res.scalars().all())
+
+        all_candidate_ids = (redis_queued_ids | db_queued_ids) - active_ids
+        cancelled_ids = list(all_candidate_ids)
+
+        if cancelled_ids:
+            # 1. Update PostgreSQL within transaction
+            await session.execute(
+                update(Job)
+                .where(Job.id.in_(cancelled_ids), Job.id.not_in(active_ids) if active_ids else True)
+                .values(
+                    status=JobStatus.CANCELLED.value,
+                    error_message="Cancelled by admin queue clearing",
+                )
+            )
+            await session.commit()
+
+            # 2. Clear from Redis queues atomically
+            if hasattr(r, "pipeline"):
+                pipe = r.pipeline()
+                pipe.delete(REDIS_KEY_QUEUE_VIDEO)
+                pipe.delete(REDIS_KEY_QUEUE_SUBTITLE)
+                pipe.delete(REDIS_KEY_QUEUE)
+                for jid in cancelled_ids:
+                    pipe.delete(f"ytdl:job_queue:{jid}")
+                    pipe.set(f"{REDIS_KEY_CANCEL_PREFIX}{jid}", "1", ex=3600)
+                await pipe.execute()
+            else:
+                await r.delete(REDIS_KEY_QUEUE_VIDEO)
+                await r.delete(REDIS_KEY_QUEUE_SUBTITLE)
+                await r.delete(REDIS_KEY_QUEUE)
+                for jid in cancelled_ids:
+                    await r.delete(f"ytdl:job_queue:{jid}")
+                    await r.set(f"{REDIS_KEY_CANCEL_PREFIX}{jid}", "1", ex=3600)
+
+            # 3. Audit log
+            try:
+                from src.services.audit_service import AuditService
+                await AuditService.log_action(
+                    session,
+                    "QUEUE_CLEAR",
+                    admin_username,
+                    f"Cleared {len(cancelled_ids)} queued jobs from queue",
+                )
+            except Exception as ae:
+                logger.warning("Could not write audit log for queue clear: %s", ae)
+        else:
+            await r.delete(REDIS_KEY_QUEUE_VIDEO, REDIS_KEY_QUEUE_SUBTITLE, REDIS_KEY_QUEUE)
+
+        return {"status": "cleared", "count": len(cancelled_ids), "cleared_ids": cancelled_ids}

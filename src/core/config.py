@@ -12,11 +12,9 @@ class Settings(BaseSettings):
 
     # Telegram Bot
     BOT_TOKEN: str = Field(default="", description="Telegram Bot API Token")
-    TELEGRAM_API_ID: Optional[int] = Field(default=None, description="Telegram API ID")
-    TELEGRAM_API_HASH: Optional[str] = Field(default=None, description="Telegram API Hash")
-    TELEGRAM_API_MODE: str = Field(default="local", description="Telegram API Mode: local or cloud")
+    TELEGRAM_API_MODE: str = Field(default="cloud", description="Telegram API Mode: cloud or local")
     TELEGRAM_API_BASE_URL: str = Field(
-        default="http://telegram-bot-api:8081",
+        default="https://api.telegram.org",
         description="Telegram Bot API Base URL (cloud or local bot API server)"
     )
     TELEGRAM_CACHE_CHANNEL_ID: Optional[int] = Field(
@@ -24,15 +22,10 @@ class Settings(BaseSettings):
         description="Private Telegram channel ID used for media caching"
     )
 
-    # Runtime File Paths & Segregated Volumes
+    # Runtime File Paths & Master Key
     MASTER_KEY_FILE: str = Field(default="/config/master/master.key")
     RUNTIME_BOT_TOKEN_FILE: str = Field(default="/config/runtime/bot-token")
     RUNTIME_READY_FILE: str = Field(default="/config/state/READY")
-    LOCAL_BOT_API_ENV_FILE: str = Field(default="/config/bot-api/local-bot-api.env")
-    LOCAL_BOT_API_TRIGGER_FILE: str = Field(default="/config/bot-api/restart-trigger")
-    TRANSFER_DIR: str = Field(default="/transfer")
-    LOCAL_BOT_API_DATA_DIR: str = Field(default="/var/lib/telegram-bot-api")
-    LOCAL_BOT_API_TEMP_DIR: str = Field(default="/tmp/telegram-bot-api")
 
     # Database & Redis
     DATABASE_URL: str = Field(
@@ -89,9 +82,12 @@ class Settings(BaseSettings):
     YTDLP_COOKIES_FILE: str = Field(default="/config/secrets/youtube-cookies.txt")
     YTDLP_COOKIES_ENABLED: bool = Field(default=False)
 
-    # Logging
+    # Logging & Paths
     LOG_LEVEL: str = Field(default="INFO")
     TEMP_DIR: str = Field(default="/tmp/ytdl")
+    TRANSFER_DIR: str = Field(default="/transfer")
+    LOCAL_BOT_API_ENV_FILE: str = Field(default="/config/bot-api/local-bot-api.env")
+    LOCAL_BOT_API_TRIGGER_FILE: str = Field(default="/config/bot-api/restart-trigger")
 
 
 settings = Settings()
