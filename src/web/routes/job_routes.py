@@ -157,4 +157,10 @@ async def clear_jobs(
             f"Cleared {count} jobs from history (scope={scope})",
         )
 
-    return {"status": "cleared", "count": count, "scope": scope}
+    return {
+        "status": "cleared",
+        "count": count,
+        "deleted_jobs_count": count,
+        "message": f"Successfully cleared {count} jobs from history",
+        "scope": scope,
+    }

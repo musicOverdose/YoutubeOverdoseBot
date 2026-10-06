@@ -84,52 +84,34 @@ function escapeHtmlSafe(str) {
 
 let _confirmResolve = null;
 
-/**
- * Show a confirmation dialog. Returns a Promise<boolean>.
- * @param {string} message
- * @param {string} [title='Confirm Action']
- * @param {string} [okLabel='Confirm']
- * @param {'btn-danger'|'btn-warning'|'btn-primary'} [okClass='btn-danger']
- */
-function showConfirm(message, title = 'Confirm Action', okLabel = 'Confirm', okClass = 'btn-danger') {
-  return new Promise((resolve) => {
-    const dialog = document.getElementById('confirm-dialog');
-    const titleEl = document.getElementById('confirm-title');
-    const msgEl = document.getElementById('confirm-message');
-    const okBtn = document.getElementById('confirm-ok');
+function initConfirmDialog() {
+  const dialog = document.getElementById('confirm-dialog');
+  if (!dialog || dialog.dataset.bound === 'true') return;
+  dialog.dataset.bound = 'true';
 
-    if (!dialog) { resolve(false); return; }
-
-    // Clean up any previous resolve
-    if (_confirmResolve) _confirmResolve(false);
-    _confirmResolve = resolve;
-
-    titleEl.textContent = title;
-    msgEl.textContent = message;
-    okBtn.textContent = okLabel;
-    okBtn.className = `btn ${okClass}`;
-
-    dialog.classList.add('active');
-  });
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  const dialog  = document.getElementById('confirm-dialog');
-  const okBtn   = document.getElementById('confirm-ok');
+  const okBtn = document.getElementById('confirm-ok');
   const cancelBtn = document.getElementById('confirm-cancel');
-
-  if (!dialog) return;
 
   const close = (result) => {
     dialog.classList.remove('active');
     if (_confirmResolve) {
-      _confirmResolve(result);
+      const resolve = _confirmResolve;
       _confirmResolve = null;
+      resolve(result);
     }
   };
 
-  okBtn?.addEventListener('click', () => close(true));
-  cancelBtn?.addEventListener('click', () => close(false));
+  okBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    close(true);
+  });
+
+  cancelBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    close(false);
+  });
 
   // Close on backdrop click
   dialog.addEventListener('click', (e) => {
@@ -140,7 +122,47 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && dialog.classList.contains('active')) close(false);
   });
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initConfirmDialog);
+} else {
+  initConfirmDialog();
+}
+
+/**
+ * Show a confirmation dialog. Returns a Promise<boolean>.
+ * @param {string} message
+ * @param {string} [title='Confirm Action']
+ * @param {string} [okLabel='Confirm']
+ * @param {'btn-danger'|'btn-warning'|'btn-primary'} [okClass='btn-danger']
+ */
+function showConfirm(message, title = 'Confirm Action', okLabel = 'Confirm', okClass = 'btn-danger') {
+  initConfirmDialog();
+  const dialog = document.getElementById('confirm-dialog');
+  if (!dialog) {
+    return Promise.resolve(window.confirm(message));
+  }
+
+  return new Promise((resolve) => {
+    const titleEl = document.getElementById('confirm-title');
+    const msgEl = document.getElementById('confirm-message');
+    const okBtn = document.getElementById('confirm-ok');
+
+    // Clean up any previous resolve
+    if (_confirmResolve) _confirmResolve(false);
+    _confirmResolve = resolve;
+
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl) msgEl.textContent = message;
+    if (okBtn) {
+      okBtn.textContent = okLabel;
+      okBtn.className = `btn ${okClass}`;
+    }
+
+    dialog.classList.add('active');
+  });
+}
 
 // ============================================================
 // Alert strip helpers (inline feedback inside sections)

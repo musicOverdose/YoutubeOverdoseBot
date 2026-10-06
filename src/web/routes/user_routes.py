@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
@@ -110,19 +110,32 @@ async def update_user_role(
     return {"status": "updated", "user_id": user_id, "new_role": req.role}
 
 
-@router.delete("/{user_id}")
+@router.delete("/{identifier}")
 async def delete_user(
-    user_id: int,
+    identifier: Optional[str] = None,
+    user_id: Optional[Any] = None,
     session: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_current_admin),
 ):
-    """Permanently delete user and their associated records from the database."""
-    stmt = select(User).where(User.id == user_id)
-    res = await session.execute(stmt)
-    user = res.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    """Permanently delete user and their associated records from the database by ID or username."""
+    user = None
+    target = str(identifier if identifier is not None else user_id or "").strip()
+    clean_id = target.lstrip("@")
+    if clean_id.isdigit():
+        uid = int(clean_id)
+        stmt = select(User).where(User.id == uid)
+        res = await session.execute(stmt)
+        user = res.scalar_one_or_none()
 
+    if not user:
+        stmt = select(User).where(func.lower(User.username) == clean_id.lower())
+        res = await session.execute(stmt)
+        user = res.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User '{identifier}' not found in database")
+
+    user_id = user.id
     username = user.username or user.first_name or str(user.id)
     await session.delete(user)
     await session.commit()
@@ -130,4 +143,9 @@ async def delete_user(
     await AuditService.log_action(
         session, "USER_DELETE", admin_user, f"Deleted user {user_id} (@{username})"
     )
-    return {"status": "deleted", "user_id": user_id}
+    return {
+        "status": "deleted",
+        "user_id": user_id,
+        "username": username,
+        "message": f"User {username} ({user_id}) permanently deleted from database",
+    }

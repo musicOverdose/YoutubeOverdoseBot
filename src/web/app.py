@@ -88,5 +88,9 @@ if os.path.exists(static_dir):
 async def serve_index():
     index_file = os.path.join(static_dir, "index.html")
     if os.path.exists(index_file):
-        return FileResponse(index_file)
+        response = FileResponse(index_file)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     return {"status": "ok", "message": "Admin API is running. Access /docs for Swagger UI."}

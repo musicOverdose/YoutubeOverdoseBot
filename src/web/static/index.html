@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YTDL — Admin Panel</title>
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="/static/css/styles.css?v=1.1.1">
 </head>
 <body>
 
@@ -450,6 +450,10 @@
           </div>
           <div class="section-actions" id="users-search-container">
             <input type="text" id="users-search" placeholder="Search username or ID…" onkeyup="loadUsers()" style="width:230px;" aria-label="Search users">
+            <button type="button" class="btn btn-danger btn-sm" onclick="promptDeleteUserFromDb()" id="btn-delete-user-db" title="Permanently delete a user from database">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;margin-right:4px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              Delete User from DB
+            </button>
           </div>
         </div>
 
@@ -1152,8 +1156,39 @@
   </div>
 </div>
 
-<script src="/static/js/api.js"></script>
-<script src="/static/js/components.js"></script>
-<script src="/static/js/app.js"></script>
+<!-- ============================================================
+     DELETE USER MODAL
+     ============================================================ -->
+<div id="modal-delete-user" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-delete-user-title">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-delete-user-title">Delete User from Database</div>
+      <button class="modal-close" onclick="closeDeleteUserModal()" aria-label="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="alert-strip alert-strip--warning mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>This will permanently delete the user, their job requests, and logs from PostgreSQL.</span>
+      </div>
+      <p class="font-sm text-secondary mb-3">
+        Enter the Telegram User ID (e.g. <code>123456789</code>) or <code>@username</code> to delete:
+      </p>
+      <div class="form-group mb-2">
+        <label for="input-delete-user-id">Telegram User ID or @username:</label>
+        <input type="text" id="input-delete-user-id" placeholder="e.g. 123456789 or @username" onkeydown="if(event.key==='Enter'){event.preventDefault();submitDeleteUserFromDb();}">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeDeleteUserModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" onclick="submitDeleteUserFromDb()">Delete User Permanently</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/api.js?v=1.1.1"></script>
+<script src="/static/js/components.js?v=1.1.1"></script>
+<script src="/static/js/app.js?v=1.1.1"></script>
 </body>
 </html>

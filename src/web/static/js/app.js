@@ -272,7 +272,8 @@ async function clearJobs() {
 
   try {
     const res = await API.post('/api/jobs/clear', {});
-    toastSuccess(res.message || `Deleted ${res.deleted_jobs_count || 0} finished jobs`, 'Jobs Cleared');
+    const count = res.deleted_jobs_count ?? res.count ?? 0;
+    toastSuccess(res.message || `Deleted ${count} finished jobs`, 'Jobs Cleared');
     loadJobs();
   } catch (err) {
     toastError(err.message || 'Failed to clear jobs', 'Error');
@@ -413,7 +414,7 @@ async function loadUsers() {
                   ? `<button class="btn btn-danger btn-sm" onclick="setUserStatus(${u.id}, 'BANNED')">Ban</button>`
                   : `<button class="btn btn-success btn-sm" onclick="setUserStatus(${u.id}, 'ACTIVE')">Unban</button>`}
                 ${wlBtn}
-                <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username || '')}')" title="Delete User">Delete</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username || '')}')" title="Permanently delete user from database">🗑️ Delete User</button>
               </div>
             </td>
           </tr>
@@ -428,6 +429,45 @@ async function setUserStatus(id, st) {
   loadUsers();
 }
 
+function promptDeleteUserFromDb() {
+  const modal = document.getElementById('modal-delete-user');
+  const input = document.getElementById('input-delete-user-id');
+  if (input) input.value = '';
+  if (modal) modal.classList.add('active');
+  input?.focus();
+}
+
+function closeDeleteUserModal() {
+  const modal = document.getElementById('modal-delete-user');
+  if (modal) modal.classList.remove('active');
+}
+
+async function submitDeleteUserFromDb() {
+  const input = document.getElementById('input-delete-user-id');
+  const val = (input?.value || '').trim();
+  if (!val) {
+    toastError('Please enter a Telegram User ID or @username', 'Input Required');
+    return;
+  }
+  closeDeleteUserModal();
+
+  const confirmed = await showConfirm(
+    `Are you sure you want to permanently delete "${val}" and all associated records from the database? This cannot be undone.`,
+    'Confirm Deletion',
+    'Delete Permanently',
+    'btn-danger'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await API.delete(`/api/users/${encodeURIComponent(val)}`);
+    toastSuccess(res.message || `User ${val} deleted from database`, 'User Deleted');
+    loadUsers();
+  } catch (err) {
+    toastError(err.message || 'Failed to delete user', 'Error');
+  }
+}
+
 async function deleteUser(id, username) {
   const label = username ? `@${username} (${id})` : `User ${id}`;
   const confirmed = await showConfirm(
@@ -440,7 +480,7 @@ async function deleteUser(id, username) {
 
   try {
     const res = await API.delete(`/api/users/${id}`);
-    toastSuccess(res.message || 'User deleted successfully', 'User Deleted');
+    toastSuccess(res.message || `User ${label} deleted from database`, 'User Deleted');
     loadUsers();
   } catch (err) {
     toastError(err.message || 'Failed to delete user', 'Error');
