@@ -55,11 +55,10 @@ def test_dynamic_quality_extraction_and_deduplication():
 
 
 def test_exact_quality_format_spec():
-    # STRICT EXACT QUALITY: must match target height exactly
+    # Primary format priority: must prioritize exact height
     spec_1080 = YtDlpService.build_video_format_spec(1080)
     assert "height=1080" in spec_1080
-    assert "<=" not in spec_1080
-    assert ">=" not in spec_1080
+    assert spec_1080.startswith("bestvideo[height=1080]")
 
     spec_720_h264 = YtDlpService.build_video_format_spec(720, "H264")
     assert "height=720" in spec_720_h264

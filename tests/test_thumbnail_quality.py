@@ -103,7 +103,7 @@ def test_process_image_file_quality_and_limits(tmp_path):
     Verifies that process_image_file:
     - Scales down high-res image using Lanczos
     - Outputs valid JPEG
-    - Stays strictly under 320x320
+    - Stays strictly under 1280x1280
     - File size is strictly < 195 KB (and therefore < 200 KB)
     """
     src_path = str(tmp_path / "creator_thumb_1080p.png")
@@ -123,9 +123,9 @@ def test_process_image_file_quality_and_limits(tmp_path):
     with Image.open(out_path) as out_img:
         assert out_img.format == "JPEG"
         tw, th = out_img.size
-        assert tw == 320
-        assert th == 180
-        assert tw <= 320 and th <= 320
+        assert tw == 1280
+        assert th == 720
+        assert tw <= 1280 and th <= 1280
 
 
 def test_adaptive_compression_when_initial_quality_too_large(tmp_path):
@@ -173,7 +173,7 @@ async def test_official_thumbnail_preferred_over_frame_extraction(tmp_path):
     assert os.path.exists(out_thumb)
     with Image.open(out_thumb) as result_img:
         assert result_img.format == "JPEG"
-        assert result_img.size == (320, 180)
+        assert result_img.size == (1280, 720)
 
 
 @pytest.mark.asyncio
@@ -216,8 +216,52 @@ async def test_official_thumbnail_download_preferred_when_local_missing(tmp_path
     assert os.path.exists(out_thumb)
     with Image.open(out_thumb) as result_img:
         assert result_img.format == "JPEG"
-        # 640x480 (4:3) scaled to 320x320 box -> 320x240
-        assert result_img.size == (320, 240)
+        assert result_img.size == (640, 480)
+
+
+@pytest.mark.asyncio
+async def test_low_res_local_thumbnail_upgraded_to_hd_candidate_url(tmp_path):
+    """
+    Verifies that when yt-dlp downloads a low-resolution thumbnail (e.g. 320x180 on a 360p video),
+    prepare_video_thumbnail identifies that the local file is not HD and downloads the HD candidate URL
+    (e.g. 1920x1080 maxresdefault) instead of attaching a blurry thumbnail.
+    """
+    video_path = str(tmp_path / "video.mp4")
+    low_res_thumb = str(tmp_path / "input.jpg")
+    out_thumb = str(tmp_path / "output_thumb.jpg")
+    open(video_path, "w").write("dummy video")
+
+    # Create low-res 320x180 local thumbnail
+    Image.new("RGB", (320, 180), color=(100, 100, 100)).save(low_res_thumb, "JPEG")
+
+    # Create high-res 1920x1080 candidate artwork to be downloaded
+    hd_temp = str(tmp_path / "hd.jpg")
+    Image.new("RGB", (1920, 1080), color=(200, 40, 40)).save(hd_temp, "JPEG")
+    with open(hd_temp, "rb") as f:
+        hd_bytes = f.read()
+
+    with patch.object(ThumbnailService, "download_thumbnail_image", new_callable=AsyncMock) as mock_dl:
+        async def _fake_dl(url, path, timeout=15.0):
+            with open(path, "wb") as f:
+                f.write(hd_bytes)
+            return True
+
+        mock_dl.side_effect = _fake_dl
+
+        ok = await ThumbnailService.prepare_video_thumbnail(
+            video_path=video_path,
+            output_thumb_path=out_thumb,
+            source_thumb_path=low_res_thumb,
+            source_thumb_urls=["https://i.ytimg.com/vi/abc/maxresdefault.jpg"],
+            duration=60,
+        )
+        assert ok is True
+        mock_dl.assert_called_once()
+
+    assert os.path.exists(out_thumb)
+    with Image.open(out_thumb) as result_img:
+        assert result_img.format == "JPEG"
+        assert result_img.size == (1280, 720)
 
 
 @pytest.mark.asyncio
@@ -257,9 +301,9 @@ async def test_fallback_frame_extraction_when_no_official_thumbnail(tmp_path):
     with Image.open(out_thumb) as result_img:
         assert result_img.format == "JPEG"
         tw, th = result_img.size
-        assert tw == 320
-        assert th == 180
-        assert tw <= 320 and th <= 320
+        assert tw == 1280
+        assert th == 720
+        assert tw <= 1280 and th <= 1280
 
 
 @pytest.mark.asyncio
@@ -331,4 +375,4 @@ async def test_ffmpeg_service_backward_compatibility(tmp_path):
     assert os.path.exists(out_thumb)
     with Image.open(out_thumb) as img:
         assert img.format == "JPEG"
-        assert img.size == (320, 180)
+        assert img.size == (640, 360)

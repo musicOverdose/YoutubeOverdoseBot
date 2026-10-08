@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from typing import Optional, Tuple, Dict, Any, List
-from PIL import Image
+from PIL import Image, ImageFilter
 import httpx
 
 from src.core.logger import get_logger
@@ -22,13 +22,14 @@ class ThumbnailService:
     2. Zero video re-encoding (thumbnail pipeline is decoupled from video stream).
     3. Strict aspect ratio preservation (no stretching, squishing, or distortion).
     4. High-quality single-pass Lanczos downsampling (Image.Resampling.LANCZOS).
-    5. Adaptive JPEG compression starting at quality=95 with 4:4:4 chroma subsampling (subsampling=0).
-    6. Telegram Bot API compliance: JPEG format, width <= 320, height <= 320, file size < 200 KB.
-    7. Multi-URL fallback: tries candidate thumbnail URLs in descending quality if top is 404.
-    8. High-resolution FFmpeg frame extraction fallback only when no official thumbnail exists.
+    5. Subtle micro-contrast sharpening to preserve crisp edges and text.
+    6. Adaptive JPEG compression starting at quality=95 with 4:4:4 chroma subsampling (subsampling=0).
+    7. Telegram Bot API compliance: JPEG format, width <= 1280, height <= 1280, file size < 200 KB.
+    8. Multi-URL fallback: tries candidate thumbnail URLs in descending quality if top is 404.
+    9. High-resolution FFmpeg frame extraction fallback only when no official thumbnail exists.
     """
 
-    MAX_DIMENSION: int = 320
+    MAX_DIMENSION: int = 1280
     MAX_FILE_BYTES: int = 195 * 1024  # 195 KB (strict Telegram limit is 200 KB)
 
     @classmethod
@@ -67,7 +68,7 @@ class ThumbnailService:
             effective_area = max(area, name_bonus)
             is_jpeg = 1 if (".jpg" in url_lower or ".jpeg" in url_lower) else 0
 
-            return (pref, effective_area, is_jpeg)
+            return (effective_area, is_jpeg, pref)
 
         return sorted(valid_thumbs, key=_thumb_score, reverse=True)
 
@@ -76,32 +77,59 @@ class ThumbnailService:
         """
         Returns the single highest-scoring official YouTube thumbnail URL.
         """
+        if not info:
+            return None
         sorted_thumbs = cls._rank_thumbnails(info)
         if sorted_thumbs:
             return sorted_thumbs[0].get("url")
-        return info.get("thumbnail") if info else None
+        return info.get("thumbnail")
 
     @classmethod
-    def get_candidate_thumbnail_urls(cls, info: Optional[Dict[str, Any]]) -> List[str]:
+    def get_candidate_thumbnail_urls(
+        cls,
+        info: Optional[Dict[str, Any]] = None,
+        source_id: Optional[str] = None,
+    ) -> List[str]:
         """
         Returns a deduplicated list of candidate thumbnail URLs in descending order of quality.
         Allows graceful fallback if the top speculative URL (e.g. maxresdefault on 240p video) returns 404.
         """
-        if not info:
+        if not info and not source_id:
             return []
 
-        sorted_thumbs = cls._rank_thumbnails(info)
+        if not source_id and info:
+            source_id = info.get("id")
+
         urls = []
         seen = set()
-        for t in sorted_thumbs:
-            u = t.get("url")
-            if u and u not in seen:
-                seen.add(u)
-                urls.append(u)
 
-        main_thumb = info.get("thumbnail")
-        if main_thumb and main_thumb not in seen:
-            urls.append(main_thumb)
+        # If we have a valid YouTube source_id, prepend deterministic high-resolution endpoints
+        # These frequently exist on YouTube CDN even when yt-dlp metadata did not list them
+        if source_id and len(source_id) == 11:
+            deterministic_urls = [
+                f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg",
+                f"https://i.ytimg.com/vi/{source_id}/maxresdefault.webp",
+                f"https://i.ytimg.com/vi/{source_id}/hq720.jpg",
+                f"https://i.ytimg.com/vi/{source_id}/hq720.webp",
+                f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg",
+            ]
+            for u in deterministic_urls:
+                if u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+
+        if info:
+            sorted_thumbs = cls._rank_thumbnails(info)
+            for t in sorted_thumbs:
+                u = t.get("url")
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+
+            main_thumb = info.get("thumbnail")
+            if main_thumb and main_thumb not in seen:
+                seen.add(main_thumb)
+                urls.append(main_thumb)
 
         return urls
 
@@ -112,6 +140,7 @@ class ThumbnailService:
         h: int,
         max_w: int = MAX_DIMENSION,
         max_h: int = MAX_DIMENSION,
+        upscale: bool = False,
     ) -> Tuple[int, int]:
         """
         Calculates output dimensions to fit strictly inside (max_w, max_h)
@@ -122,6 +151,9 @@ class ThumbnailService:
             return (max_w, max_h)
 
         scale = min(max_w / float(w), max_h / float(h))
+        if not upscale and scale > 1.0:
+            return (w, h)
+
         new_w = max(1, min(max_w, int(round(w * scale))))
         new_h = max(1, min(max_h, int(round(h * scale))))
         return (new_w, new_h)
@@ -137,6 +169,7 @@ class ThumbnailService:
         Saves a PIL Image to output_path as a high-fidelity JPEG strictly <= max_bytes.
         Starts with quality=95 and 4:4:4 chroma subsampling (subsampling=0) for sharp text/edges.
         Dynamically adapts quality and subsampling if necessary to ensure compliance.
+        Includes fallback scaling for exceptionally noisy images.
         """
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -152,6 +185,20 @@ class ThumbnailService:
             img.save(output_path, "JPEG", quality=q, optimize=True)
             if os.path.exists(output_path) and os.path.getsize(output_path) <= max_bytes:
                 return True
+
+        # Pass 3: Fallback scaling for exceptionally noisy/high-entropy images
+        # Dynamically scale down by 15% steps to guarantee compliance
+        curr_img = img
+        for _ in range(3):
+            w = int(round(curr_img.width * 0.85))
+            h = int(round(curr_img.height * 0.85))
+            if w < 100 or h < 100:
+                break
+            curr_img = curr_img.resize((w, h), Image.Resampling.LANCZOS)
+            for q in [75, 60, 50]:
+                curr_img.save(output_path, "JPEG", quality=q, optimize=True)
+                if os.path.exists(output_path) and os.path.getsize(output_path) <= max_bytes:
+                    return True
 
         return False
 
@@ -197,7 +244,8 @@ class ThumbnailService:
         """
         Opens source_image_path (JPEG, WebP, PNG), optionally crops horizontal pillarboxes
         if content is vertical, scales it with Lanczos resampling to fit inside
-        MAX_DIMENSION x MAX_DIMENSION preserving aspect ratio, and saves as a compliant JPEG.
+        MAX_DIMENSION x MAX_DIMENSION preserving aspect ratio, applies subtle sharpening,
+        and saves as a compliant JPEG.
         """
         if not os.path.exists(source_image_path) or os.path.getsize(source_image_path) == 0:
             return False
@@ -216,6 +264,8 @@ class ThumbnailService:
 
                 if (src_w, src_h) != (target_w, target_h):
                     img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                    # Apply gentle micro-contrast unsharp mask to keep text and logo edges razor-sharp
+                    img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
 
                 ok = cls.save_image_adaptive_jpeg(img, output_thumb_path, cls.MAX_FILE_BYTES)
                 if ok and os.path.exists(output_thumb_path):
@@ -383,34 +433,49 @@ class ThumbnailService:
     ) -> bool:
         """
         Orchestrates thumbnail preparation:
-        1. Prioritizes official creator artwork (local downloaded thumbnail file or remote candidate URLs).
-           For vertical videos, automatically crops horizontal pillarboxes to 9:16 with zero black lines.
-        2. Falls back to high-resolution FFmpeg frame extraction only if official thumbnail is unavailable.
+        1. Prioritizes official creator artwork. If a local thumbnail is already HD
+           (>= 1280x720 or vertical >= 720x1280), processes it immediately.
+        2. If local thumbnail is low-resolution (< 1280x720), tries candidate URLs first
+           to obtain official HD creator artwork (e.g. 1080p maxresdefault or 720p hq720).
+           For vertical videos, automatically crops horizontal pillarboxes to 9:16.
+        3. Falls back to local thumbnail if candidate URLs are unreachable.
+        4. Falls back to native-resolution FFmpeg frame extraction only if no official artwork exists.
         """
-        # Priority 1: Check existing local official thumbnail file
+        # Step 1: Check if local thumbnail exists and whether it meets HD resolution
+        local_is_hd = False
         if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
-            logger.info("Preparing thumbnail using local official YouTube artwork: %s", source_thumb_path)
+            try:
+                with Image.open(source_thumb_path) as img:
+                    w, h = img.size
+                    if max(w, h) >= 1280 or (is_vertical and min(w, h) >= 720):
+                        local_is_hd = True
+            except Exception as e:
+                logger.debug("Could not inspect local thumbnail dimensions: %s", e)
+
+        if local_is_hd:
+            logger.info("Preparing thumbnail using local HD official YouTube artwork: %s", source_thumb_path)
             ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical)
             if ok:
                 return True
-            logger.warning("Failed processing local official thumbnail; checking candidate URLs")
+            logger.warning("Failed processing local HD thumbnail; checking candidate URLs")
 
-        # Priority 2: Check remote official thumbnail URLs
+        # Step 2: Build candidate URLs (high-res official artwork)
         candidate_urls: List[str] = []
         if source_thumb_urls:
             candidate_urls.extend(source_thumb_urls)
         if source_thumb_url and source_thumb_url not in candidate_urls:
             candidate_urls.insert(0, source_thumb_url)
 
+        # Try candidate high-res URLs
         for url in candidate_urls:
             temp_thumb = output_thumb_path + ".download.tmp"
             try:
-                logger.info("Downloading official YouTube thumbnail from: %s", url)
+                logger.info("Downloading candidate high-res YouTube thumbnail from: %s", url)
                 dl_ok = await cls.download_thumbnail_image(url, temp_thumb)
                 if dl_ok:
                     ok = cls.process_image_file(temp_thumb, output_thumb_path, is_vertical=is_vertical)
                     if ok:
-                        logger.info("Successfully prepared thumbnail from official URL: %s", url)
+                        logger.info("Successfully prepared HD thumbnail from candidate URL: %s", url)
                         return True
             finally:
                 if os.path.exists(temp_thumb):
@@ -419,6 +484,13 @@ class ThumbnailService:
                     except OSError:
                         pass
 
-        # Priority 3: Fallback native-resolution frame extraction via FFmpeg
+        # Step 3: Fallback to local thumbnail if candidate URLs failed (even if lower resolution)
+        if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
+            logger.info("Candidate URLs unreachable; falling back to local thumbnail: %s", source_thumb_path)
+            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical)
+            if ok:
+                return True
+
+        # Step 4: Fallback native-resolution frame extraction via FFmpeg
         logger.info("No usable official YouTube thumbnail found. Falling back to FFmpeg frame extraction.")
         return await cls.extract_frame_fallback(video_path, output_thumb_path, duration)

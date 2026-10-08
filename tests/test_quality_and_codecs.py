@@ -314,8 +314,8 @@ async def test_thumbnail_generation_dar_bounds_and_size(tmp_path):
         with Image.open(t_path) as img:
             assert img.format == "JPEG"
             tw, th = img.size
-            assert tw <= 320, f"Thumbnail width {tw} exceeds 320"
-            assert th <= 320, f"Thumbnail height {th} exceeds 320"
+            assert tw <= 1280, f"Thumbnail width {tw} exceeds 1280"
+            assert th <= 1280, f"Thumbnail height {th} exceeds 1280"
 
             actual_dar = tw / th
             assert abs(actual_dar - expected_dar) / expected_dar < 0.05, (

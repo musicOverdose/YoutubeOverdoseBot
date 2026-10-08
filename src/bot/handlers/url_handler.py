@@ -35,7 +35,7 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
     available_heights = YtDlpService.get_available_resolutions(info)
     resolution_labels = YtDlpService.get_resolution_labels(info)
     title = info.get("title", "YouTube Video")
-    thumbnail_url = info.get("thumbnail")
+    thumbnail_url = ThumbnailService.get_best_thumbnail_url(info) or info.get("thumbnail")
 
     try:
         await status_msg.delete()
