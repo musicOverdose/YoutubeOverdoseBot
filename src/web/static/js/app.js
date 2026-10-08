@@ -83,6 +83,7 @@ function loadSection(name) {
     case 'system':    loadSystem();    break;
     case 'logs':      loadLogs();      break;
     case 'audit':     loadAudit();     break;
+    case 'bot-messages': loadBotMessages(); break;
   }
 }
 
@@ -647,8 +648,10 @@ async function loadMustJoin() {
 
     try {
       const msgData = await API.get('/api/must-join/message');
-      const area = document.getElementById('mj-custom-msg-area');
-      if (area && msgData.message) area.value = msgData.message;
+      const area1 = document.getElementById('mj-custom-msg-area');
+      const area2 = document.getElementById('bot-mj-msg-area');
+      if (area1 && msgData.message) area1.value = msgData.message;
+      if (area2 && msgData.message) area2.value = msgData.message;
     } catch (e) {}
 
     if (data.exempt_users !== undefined) {
@@ -1164,28 +1167,42 @@ async function executeMigration() {
 
 async function saveMustJoinMessage() {
   hideAlert('must-join-alert');
-  const msg = document.getElementById('mj-custom-msg-area').value;
+  hideAlert('bot-mj-alert');
+  const area = document.getElementById('bot-mj-msg-area') || document.getElementById('mj-custom-msg-area');
+  const msg = area ? area.value : '';
   try {
-    await API.post('/api/must-join/message', { message: msg });
+    const res = await API.post('/api/must-join/message', { message: msg });
+    const area1 = document.getElementById('mj-custom-msg-area');
+    const area2 = document.getElementById('bot-mj-msg-area');
+    if (area1) area1.value = res.message;
+    if (area2) area2.value = res.message;
     showAlert('must-join-alert', 'Custom Must-Join message saved', 'success');
+    showAlert('bot-mj-alert', 'Must-Join gate message saved', 'success');
     toastSuccess('Custom Must-Join message saved', 'Saved');
   } catch (err) {
     showAlert('must-join-alert', `Failed to save: ${err.message}`, 'error');
+    showAlert('bot-mj-alert', `Failed to save: ${err.message}`, 'error');
     toastError(`Failed to save: ${err.message}`, 'Save Error');
   }
 }
 
 async function resetMustJoinMessage() {
   hideAlert('must-join-alert');
+  hideAlert('bot-mj-alert');
   const confirmed = await showConfirm('Reset Must-Join template message to system default?', 'Reset Message', 'Reset', 'btn-warning');
   if (!confirmed) return;
   try {
     const res = await API.post('/api/must-join/message/reset', {});
-    document.getElementById('mj-custom-msg-area').value = res.message;
+    const area1 = document.getElementById('mj-custom-msg-area');
+    const area2 = document.getElementById('bot-mj-msg-area');
+    if (area1) area1.value = res.message;
+    if (area2) area2.value = res.message;
     showAlert('must-join-alert', 'Reset to default template', 'success');
+    showAlert('bot-mj-alert', 'Reset to default template', 'success');
     toastSuccess('Reset to default template');
   } catch (err) {
     showAlert('must-join-alert', `Failed to reset: ${err.message}`, 'error');
+    showAlert('bot-mj-alert', `Failed to reset: ${err.message}`, 'error');
     toastError(`Failed to reset: ${err.message}`, 'Reset Error');
   }
 }
@@ -1195,14 +1212,16 @@ async function saveMustJoinExemptUsers() {
 }
 
 // =============================================================================
-// TELEGRAM /start WELCOME MESSAGE
+// TELEGRAM BOT MESSAGE TEMPLATES (WELCOME, HELP, MUST-JOIN)
 // =============================================================================
 
 async function loadWelcomeMessage() {
   try {
     const res  = await API.get('/api/telegram/welcome-message');
-    const area = document.getElementById('tg-welcome-msg-area');
-    if (area) area.value = res.message || '';
+    const area1 = document.getElementById('tg-welcome-msg-area');
+    const area2 = document.getElementById('bot-welcome-msg-area');
+    if (area1) area1.value = res.message || '';
+    if (area2) area2.value = res.message || '';
   } catch (err) {
     console.error('Failed to load welcome message:', err);
   }
@@ -1210,47 +1229,124 @@ async function loadWelcomeMessage() {
 
 function showWelcomeAlert(msg, isSuccess = true) {
   showAlert('tg-welcome-alert', msg, isSuccess ? 'success' : 'error');
+  showAlert('bot-welcome-alert', msg, isSuccess ? 'success' : 'error');
 }
 
 async function saveWelcomeMessage() {
   hideAlert('tg-welcome-alert');
-  const btn  = document.getElementById('btn-save-welcome');
-  const area = document.getElementById('tg-welcome-msg-area');
+  hideAlert('bot-welcome-alert');
+  const btn1 = document.getElementById('btn-save-welcome');
+  const btn2 = document.getElementById('btn-save-welcome-bot');
+  const area = document.getElementById('bot-welcome-msg-area') || document.getElementById('tg-welcome-msg-area');
 
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn1) { btn1.disabled = true; btn1.textContent = 'Saving…'; }
+  if (btn2) { btn2.disabled = true; btn2.textContent = 'Saving…'; }
 
   try {
     const res = await API.post('/api/telegram/welcome-message', { message: area ? area.value : '' });
-    if (area) area.value = res.message;
+    const area1 = document.getElementById('tg-welcome-msg-area');
+    const area2 = document.getElementById('bot-welcome-msg-area');
+    if (area1) area1.value = res.message;
+    if (area2) area2.value = res.message;
     showWelcomeAlert('Welcome message saved successfully', true);
     toastSuccess('Welcome message saved');
   } catch (err) {
     showWelcomeAlert(`Failed to save: ${err.message}`, false);
     toastError(err.message, 'Save Failed');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Welcome Message'; }
+    if (btn1) { btn1.disabled = false; btn1.textContent = 'Save Welcome Message'; }
+    if (btn2) { btn2.disabled = false; btn2.textContent = 'Save Welcome'; }
   }
 }
 
 async function resetWelcomeMessage() {
   hideAlert('tg-welcome-alert');
+  hideAlert('bot-welcome-alert');
   const confirmed = await showConfirm('Reset /start welcome message to system default?', 'Reset Welcome Message', 'Reset', 'btn-warning');
   if (!confirmed) return;
 
-  const btn  = document.getElementById('btn-reset-welcome');
-  const area = document.getElementById('tg-welcome-msg-area');
+  const btn1 = document.getElementById('btn-reset-welcome');
+  const area = document.getElementById('bot-welcome-msg-area') || document.getElementById('tg-welcome-msg-area');
 
-  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+  if (btn1) { btn1.disabled = true; btn1.textContent = 'Resetting…'; }
 
   try {
     const res = await API.post('/api/telegram/welcome-message/reset', {});
-    if (area) area.value = res.message || '';
+    const area1 = document.getElementById('tg-welcome-msg-area');
+    const area2 = document.getElementById('bot-welcome-msg-area');
+    if (area1) area1.value = res.message || '';
+    if (area2) area2.value = res.message || '';
     showWelcomeAlert('Welcome message reset to default template', true);
     toastSuccess('Welcome message reset to default');
   } catch (err) {
     showWelcomeAlert(`Failed to reset: ${err.message}`, false);
     toastError(err.message, 'Reset Failed');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Reset to Default'; }
+    if (btn1) { btn1.disabled = false; btn1.textContent = 'Reset to Default'; }
   }
+}
+
+async function loadHelpMessage() {
+  try {
+    const res = await API.get('/api/telegram/help-message');
+    const area = document.getElementById('bot-help-msg-area');
+    if (area) area.value = res.message || '';
+  } catch (err) {
+    console.error('Failed to load help message:', err);
+  }
+}
+
+function showHelpAlert(msg, isSuccess = true) {
+  showAlert('tg-help-alert', msg, isSuccess ? 'success' : 'error');
+}
+
+async function saveHelpMessage() {
+  hideAlert('tg-help-alert');
+  const btn = document.getElementById('btn-save-help');
+  const area = document.getElementById('bot-help-msg-area');
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  try {
+    const res = await API.post('/api/telegram/help-message', { message: area ? area.value : '' });
+    if (area) area.value = res.message;
+    showHelpAlert('Help message saved successfully', true);
+    toastSuccess('Help message saved');
+  } catch (err) {
+    showHelpAlert(`Failed to save: ${err.message}`, false);
+    toastError(err.message, 'Save Failed');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Help'; }
+  }
+}
+
+async function resetHelpMessage() {
+  hideAlert('tg-help-alert');
+  const confirmed = await showConfirm('Reset /help message to system default?', 'Reset Help Message', 'Reset', 'btn-warning');
+  if (!confirmed) return;
+
+  const btn = document.getElementById('btn-reset-help');
+  const area = document.getElementById('bot-help-msg-area');
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+
+  try {
+    const res = await API.post('/api/telegram/help-message/reset', {});
+    if (area) area.value = res.message || '';
+    showHelpAlert('Help message reset to default template', true);
+    toastSuccess('Help message reset to default');
+  } catch (err) {
+    showHelpAlert(`Failed to reset: ${err.message}`, false);
+    toastError(err.message, 'Reset Failed');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Reset'; }
+  }
+}
+
+async function loadBotMessages() {
+  await Promise.all([
+    loadWelcomeMessage(),
+    loadHelpMessage(),
+    loadMustJoinMessage()
+  ]);
 }

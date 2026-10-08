@@ -47,6 +47,7 @@ SETTING_CACHE_CHANNEL_ID = "telegram_cache_channel_id"
 SETTING_CONFIG_VERSION = "telegram_config_version"
 SETTING_MUST_JOIN_MSG = "must_join_message"
 SETTING_WELCOME_MSG = "welcome_message"
+SETTING_HELP_MSG = "help_message"
 
 # Application Setting Keys
 SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL = "max_video_file_size_mb_local"
@@ -144,6 +145,14 @@ DEFAULT_WELCOME_MESSAGE = (
     "• 🎵 High-quality MP3 with ID3 cover art\n"
     "• 💬 Subtitles in 🇬🇧 English & 🇮🇷 Persian\n"
     "• Instant delivery for cached media"
+)
+
+DEFAULT_HELP_MESSAGE = (
+    "📖 <b>How to use Youtube Overdose:</b>\n\n"
+    "1. 🔗 <b>Send a Link:</b> Paste any YouTube video or Shorts link in the chat.\n"
+    "2. 🎛 <b>Choose Format:</b> Select your desired resolution, 🎵 MP3, or 💬 Subtitles.\n"
+    "3. ⚡ <b>Fast Delivery:</b> The bot downloads the highest quality source and sends it right here!\n\n"
+    "💡 <i>Tip: Send /start anytime to view the main welcome menu.</i>"
 )
 
 
@@ -1355,6 +1364,77 @@ class SettingService:
             )
             await sess.commit()
             return DEFAULT_WELCOME_MESSAGE
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            if own_session:
+                await sess.close()
+
+    @classmethod
+    async def get_help_message(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get the active help message template for /help."""
+        custom_msg = await cls.get_active_setting(SETTING_HELP_MSG, session)
+        return custom_msg if custom_msg else DEFAULT_HELP_MESSAGE
+
+    @classmethod
+    async def save_help_message(
+        cls,
+        message: str,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        """Validate and save a custom help message template for /help."""
+        clean_msg = message.strip()
+        is_valid, err = validate_telegram_html(clean_msg)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid Telegram HTML formatting: {err}",
+            )
+
+        own_session = session is None
+        sess = session or AsyncSessionLocal()
+        try:
+            stmt = select(Setting).where(Setting.key == SETTING_HELP_MSG, Setting.status == "ACTIVE")
+            res = await sess.execute(stmt)
+            item = res.scalar_one_or_none()
+            if item:
+                item.value = clean_msg
+            else:
+                sess.add(
+                    Setting(
+                        key=SETTING_HELP_MSG,
+                        status="ACTIVE",
+                        value=clean_msg,
+                        is_encrypted=False,
+                        description="Custom Telegram Bot Help Message Template",
+                    )
+                )
+            await sess.commit()
+            return clean_msg
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            if own_session:
+                await sess.close()
+
+    @classmethod
+    async def reset_help_message(
+        cls,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        """Reset the /help message to system default."""
+        own_session = session is None
+        sess = session or AsyncSessionLocal()
+        try:
+            await sess.execute(
+                delete(Setting).where(Setting.key == SETTING_HELP_MSG, Setting.status == "ACTIVE")
+            )
+            await sess.commit()
+            return DEFAULT_HELP_MESSAGE
         except Exception:
             await sess.rollback()
             raise

@@ -12,7 +12,7 @@ from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.models.user import User
 from src.services.must_join_service import MustJoinService
-from src.services.setting_service import DEFAULT_WELCOME_MESSAGE, SettingService
+from src.services.setting_service import DEFAULT_HELP_MESSAGE, DEFAULT_WELCOME_MESSAGE, SettingService
 
 logger = setup_logger("bot_base")
 base_router = Router()
@@ -94,11 +94,24 @@ async def cmd_start(message: Message, bot: Optional[Bot] = None):
 
 @base_router.message(Command("help"))
 async def cmd_help(message: Message):
-    help_text = (
-        "📖 <b>How to use:</b>\n\n"
-        "1. Simply paste a YouTube link in the chat.\n"
-        "2. Choose your preferred video resolution, MP3, or Subtitle.\n"
-        "3. If you picked video, select H.264 or H.265.\n"
-        "4. Your file will be processed and sent right away!"
-    )
-    await message.answer(help_text)
+    help_text = DEFAULT_HELP_MESSAGE
+    try:
+        async with AsyncSessionLocal() as session:
+            try:
+                help_text = await SettingService.get_help_message(session)
+            except Exception as e:
+                logger.warning("Failed to load help message from DB: %s. Using default.", e)
+    except Exception as e:
+        logger.error("Database session error in /help: %s. Using default.", e)
+
+    try:
+        await message.answer(help_text, parse_mode=ParseMode.HTML)
+    except TelegramBadRequest as e:
+        err_msg = str(e).lower()
+        if "can't parse entities" in err_msg or "entity" in err_msg:
+            logger.warning("Custom help message failed HTML parsing: %s. Falling back to default.", e)
+            await message.answer(DEFAULT_HELP_MESSAGE, parse_mode=ParseMode.HTML)
+        else:
+            await message.answer(help_text)
+    except Exception:
+        await message.answer(DEFAULT_HELP_MESSAGE, parse_mode=ParseMode.HTML)

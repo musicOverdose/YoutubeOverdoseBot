@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YTDL — Admin Panel</title>
-  <link rel="stylesheet" href="/static/css/styles.css?v=1.1.1">
+  <title>Youtube Overdose — Admin Dashboard</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=2.0.0">
 </head>
 <body>
 
@@ -36,50 +36,44 @@
        ============================ -->
   <aside class="sidebar" id="sidebar" aria-label="Main navigation">
     <div class="sidebar-brand">
-      <svg class="sidebar-brand__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-        <path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/>
-        <polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02"/>
-      </svg>
+      <div class="brand-badge">
+        <svg class="brand-badge__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/>
+          <polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02" fill="currentColor"/>
+        </svg>
+      </div>
       <div>
-        <div class="sidebar-brand__name">YTDL</div>
-        <span class="sidebar-brand__sub">Telegram Downloader</span>
+        <div class="sidebar-brand__name">Youtube Overdose</div>
+        <span class="sidebar-brand__sub">Media Engine</span>
       </div>
     </div>
 
     <nav class="sidebar-nav" aria-label="Sections">
 
-      <!-- Monitor -->
+      <!-- Overview -->
       <div class="nav-group">
-        <div class="nav-group__label">Monitor</div>
+        <div class="nav-group__label">Overview</div>
         <button class="nav-item active" data-section="dashboard" aria-current="page">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
           Dashboard
         </button>
         <button class="nav-item" data-section="queue">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          Queue
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Active Queue
         </button>
         <button class="nav-item" data-section="jobs">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-          Jobs
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Job History
         </button>
         <button class="nav-item" data-section="cache">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-          Cache
-        </button>
-        <button class="nav-item" data-section="logs">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
-          Logs
-        </button>
-        <button class="nav-item" data-section="audit">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          Audit Log
+          Media Cache
         </button>
       </div>
 
-      <!-- Users -->
+      <!-- Community & Access -->
       <div class="nav-group">
-        <div class="nav-group__label">Users</div>
+        <div class="nav-group__label">Community & Access</div>
         <button class="nav-item" data-section="users">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Users
@@ -90,16 +84,25 @@
         </button>
       </div>
 
-      <!-- Configuration -->
+      <!-- Bot Customization -->
+      <div class="nav-group">
+        <div class="nav-group__label">Bot Customization</div>
+        <button class="nav-item" data-section="bot-messages">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/></svg>
+          Bot Messages
+        </button>
+      </div>
+
+      <!-- Engine & Configuration -->
       <div class="nav-group">
         <div class="nav-group__label">Configuration</div>
         <button class="nav-item" data-section="telegram">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          Telegram
+          Telegram API
         </button>
         <button class="nav-item" data-section="youtube">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/><polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02"/></svg>
-          YouTube
+          YouTube & Limits
         </button>
         <button class="nav-item" data-section="cookies">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01"/><path d="M16 15.5v.01"/><path d="M12 12v.01"/><path d="M11 17v.01"/><path d="M7 14v.01"/></svg>
@@ -111,11 +114,24 @@
         </button>
         <button class="nav-item" data-section="settings">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.87 15.28M4.93 4.93A10 10 0 0 0 3.06 20.21"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          Settings
+          Global Settings
         </button>
+      </div>
+
+      <!-- System & Diagnostics -->
+      <div class="nav-group">
+        <div class="nav-group__label">System & Logs</div>
         <button class="nav-item" data-section="system">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          System
+          Diagnostics
+        </button>
+        <button class="nav-item" data-section="logs">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+          Live Logs
+        </button>
+        <button class="nav-item" data-section="audit">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Audit Log
         </button>
       </div>
     </nav>
@@ -589,6 +605,130 @@
               Save Message
             </button>
             <button class="btn btn-secondary" onclick="resetMustJoinMessage()">Reset to Default</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================
+           BOT MESSAGES CUSTOMIZATION
+           ================================================ -->
+      <section id="sec-bot-messages" class="section" aria-label="Bot Messages">
+        <div class="section-header">
+          <div class="section-header__left">
+            <div class="section-title">Bot Message Templates</div>
+            <div class="section-sub">Configure user-facing text, interactive formatting, and dynamic placeholders</div>
+          </div>
+        </div>
+
+        <div class="grid grid-3 gap-4 mb-4">
+          <!-- 1. Welcome Message Card -->
+          <div class="card">
+            <div class="card__header">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-primary">/start</span>
+                <div class="card__title">Welcome Message</div>
+              </div>
+            </div>
+            <div class="alert-strip hidden mb-3" id="bot-welcome-alert" role="alert"></div>
+            <p class="font-xs text-secondary mb-3">
+              Sent when a user starts the bot. Supports <code>{first_name}</code> to greet subscriber.
+            </p>
+            <div class="form-group">
+              <label for="bot-welcome-msg-area">Template (HTML):</label>
+              <textarea id="bot-welcome-msg-area" rows="9" placeholder="Enter /start welcome template..."></textarea>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary btn-sm" id="btn-save-welcome-bot" onclick="saveWelcomeMessage()">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Welcome
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="resetWelcomeMessage()">Reset</button>
+            </div>
+          </div>
+
+          <!-- 2. Help Message Card -->
+          <div class="card">
+            <div class="card__header">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-info">/help</span>
+                <div class="card__title">Help Message</div>
+              </div>
+            </div>
+            <div class="alert-strip hidden mb-3" id="tg-help-alert" role="alert"></div>
+            <p class="font-xs text-secondary mb-3">
+              Sent when a user invokes /help command. Clear usage instructions and hints.
+            </p>
+            <div class="form-group">
+              <label for="bot-help-msg-area">Template (HTML):</label>
+              <textarea id="bot-help-msg-area" rows="9" placeholder="Enter /help instructions template..."></textarea>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary btn-sm" id="btn-save-help" onclick="saveHelpMessage()">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Help
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-reset-help" onclick="resetHelpMessage()">Reset</button>
+            </div>
+          </div>
+
+          <!-- 3. Must-Join Gate Card -->
+          <div class="card">
+            <div class="card__header">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-warning">Gate</span>
+                <div class="card__title">Must-Join Gate Message</div>
+              </div>
+            </div>
+            <div class="alert-strip hidden mb-3" id="bot-mj-alert" role="alert"></div>
+            <p class="font-xs text-secondary mb-3">
+              Sent when channel join is required. Supports <code>{first_name}</code> and <code>{channel_list}</code>.
+            </p>
+            <div class="form-group">
+              <label for="bot-mj-msg-area">Template (HTML):</label>
+              <textarea id="bot-mj-msg-area" rows="9" placeholder="Enter must-join prompt template..."></textarea>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary btn-sm" onclick="saveMustJoinMessage()">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Gate
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="resetMustJoinMessage()">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- HTML Formatting Guide Cheat Sheet Card -->
+        <div class="card">
+          <div class="card__header">
+            <div>
+              <div class="card__title">Telegram HTML Formatting Reference</div>
+              <div class="card__sub">All templates support official Telegram Bot API HTML tags and nested styles</div>
+            </div>
+          </div>
+          <div class="grid grid-4 gap-3 font-xs text-secondary mt-2">
+            <div>
+              <div class="font-bold text-primary mb-1">Text Styles</div>
+              <code>&lt;b&gt;bold&lt;/b&gt;</code><br>
+              <code>&lt;i&gt;italic&lt;/i&gt;</code><br>
+              <code>&lt;u&gt;underline&lt;/u&gt;</code>
+            </div>
+            <div>
+              <div class="font-bold text-primary mb-1">Inline Elements</div>
+              <code>&lt;s&gt;strikethrough&lt;/s&gt;</code><br>
+              <code>&lt;tg-spoiler&gt;spoiler&lt;/tg-spoiler&gt;</code><br>
+              <code>&lt;code&gt;inline code&lt;/code&gt;</code>
+            </div>
+            <div>
+              <div class="font-bold text-primary mb-1">Blocks & Links</div>
+              <code>&lt;pre&gt;code block&lt;/pre&gt;</code><br>
+              <code>&lt;blockquote&gt;quote&lt;/blockquote&gt;</code><br>
+              <code>&lt;a href="url"&gt;hyperlink&lt;/a&gt;</code>
+            </div>
+            <div>
+              <div class="font-bold text-primary mb-1">Template Variables</div>
+              <code>{first_name}</code> — Subscriber name<br>
+              <code>{channel_list}</code> — Required channels
+            </div>
           </div>
         </div>
       </section>
@@ -1068,10 +1208,15 @@
 <div id="login-modal" class="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-heading">
   <div class="login-card">
     <div class="login-card__logo">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/><polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02"/></svg>
+      <div class="brand-badge brand-badge--lg">
+        <svg class="brand-badge__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/>
+          <polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02" fill="currentColor"/>
+        </svg>
+      </div>
       <div>
-        <div class="login-card__brand">YTDL Admin</div>
-        <div class="login-card__sub">Telegram Downloader</div>
+        <div class="login-card__brand">Youtube Overdose</div>
+        <div class="login-card__sub">Admin Dashboard</div>
       </div>
     </div>
 
@@ -1191,8 +1336,8 @@
   </div>
 </div>
 
-<script src="/static/js/api.js?v=1.1.2"></script>
-<script src="/static/js/components.js?v=1.1.2"></script>
-<script src="/static/js/app.js?v=1.1.2"></script>
+<script src="/static/js/api.js?v=2.0.0"></script>
+<script src="/static/js/components.js?v=2.0.0"></script>
+<script src="/static/js/app.js?v=2.0.0"></script>
 </body>
 </html>

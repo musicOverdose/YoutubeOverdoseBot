@@ -1,41 +1,43 @@
 /* ===========================
-   YTDL Design System — Dark
+   Youtube Overdose — Modern Dark System
    =========================== */
 
 :root {
-  /* Application palette */
-  --bg-app:          #080a0d;
-  --bg-sidebar:      #0b0e12;
-  --bg-surface:      #10141a;
-  --bg-elevated:     #151a21;
-  --bg-input:        #0c1015;
-  --border:          #202731;
-  --border-subtle:   #161c24;
+  /* Application palette — Modern Eye-Friendly Deep Slate/Obsidian */
+  --bg-app:          #080a0f;
+  --bg-sidebar:      #0b0e15;
+  --bg-surface:      #101520;
+  --bg-elevated:     #161d2b;
+  --bg-input:        #0c1018;
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-subtle:   rgba(255, 255, 255, 0.04);
+  --border-focus:    #ff2a51;
 
   /* Typography */
-  --text-primary:    #f1f5f9;
-  --text-secondary:  #8b95a5;
-  --text-muted:      #596273;
+  --text-primary:    #f8fafc;
+  --text-secondary:  #94a3b8;
+  --text-muted:      #64748b;
 
-  /* Accent */
-  --accent:          #8b5cf6;
-  --accent-hover:    #a78bfa;
-  --accent-dim:      rgba(139, 92, 246, 0.12);
-  --accent-glow:     rgba(139, 92, 246, 0.25);
+  /* Brand Accent: Youtube Overdose Crimson & Neon */
+  --accent:          #ff2a51;
+  --accent-hover:    #ff4d6d;
+  --accent-dim:      rgba(255, 42, 81, 0.12);
+  --accent-glow:     rgba(255, 42, 81, 0.28);
+  --accent-grad:     linear-gradient(135deg, #ff2a51 0%, #e11d48 100%);
 
   /* Semantic */
-  --success:         #22c55e;
-  --success-dim:     rgba(34, 197, 94, 0.12);
+  --success:         #10b981;
+  --success-dim:     rgba(16, 185, 129, 0.12);
   --warning:         #f59e0b;
   --warning-dim:     rgba(245, 158, 11, 0.12);
   --danger:          #ef4444;
   --danger-dim:      rgba(239, 68, 68, 0.12);
-  --info:            #38bdf8;
-  --info-dim:        rgba(56, 189, 248, 0.12);
+  --info:            #06b6d4;
+  --info-dim:        rgba(6, 182, 212, 0.12);
 
   /* Layout */
-  --sidebar-w:       240px;
-  --topbar-h:        56px;
+  --sidebar-w:       245px;
+  --topbar-h:        58px;
 
   /* Spacing */
   --sp-1:  4px;
@@ -153,36 +155,66 @@ code {
   height: var(--topbar-h);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.015);
 }
 
-.sidebar-brand__icon {
-  width: 28px;
-  height: 28px;
-  color: var(--accent);
+.brand-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--accent-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  box-shadow: 0 2px 12px rgba(255, 42, 81, 0.35);
+  transition: transform var(--t-fast);
+}
+
+.brand-badge:hover {
+  transform: scale(1.05);
+}
+
+.brand-badge__icon {
+  width: 18px;
+  height: 18px;
+  color: #ffffff;
+}
+
+.brand-badge--lg {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 4px 18px rgba(255, 42, 81, 0.45);
+}
+
+.brand-badge--lg .brand-badge__icon {
+  width: 24px;
+  height: 24px;
 }
 
 .sidebar-brand__name {
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
 }
 
 .sidebar-brand__sub {
   font-size: 0.65rem;
   color: var(--text-muted);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   display: block;
-  margin-top: -2px;
+  margin-top: 1px;
 }
 
 /* Nav */
 .sidebar-nav {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-2);
 }
 
 .nav-group {
@@ -190,9 +222,9 @@ code {
 }
 
 .nav-group__label {
-  padding: var(--sp-2) var(--sp-5);
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 0.68rem;
+  font-weight: 700;
   color: var(--text-muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -202,7 +234,7 @@ code {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-5);
+  padding: var(--sp-2) var(--sp-3);
   color: var(--text-secondary);
   cursor: pointer;
   border: none;
@@ -210,43 +242,52 @@ code {
   width: 100%;
   text-align: left;
   font-family: var(--font-ui);
-  font-size: 0.875rem;
-  transition: color var(--t-fast), background var(--t-fast);
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all var(--t-fast);
   position: relative;
-  border-radius: 0;
-  line-height: 1.6;
-  min-height: 36px;
+  border-radius: var(--radius);
+  line-height: 1.5;
+  min-height: 38px;
   user-select: none;
+  margin-bottom: 2px;
 }
 
 .nav-item svg {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.65;
+  transition: opacity var(--t-fast), transform var(--t-fast);
 }
 
 .nav-item:hover {
-  background: rgba(255,255,255,0.04);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
 }
 
-.nav-item:hover svg { opacity: 1; }
+.nav-item:hover svg {
+  opacity: 1;
+  transform: translateX(1px);
+}
 
 .nav-item.active {
   background: var(--accent-dim);
-  color: var(--accent-hover);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(255, 42, 81, 0.2);
 }
 
 .nav-item.active::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 0;
-  bottom: 0;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
   background: var(--accent);
   border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .nav-item.active svg {
@@ -918,12 +959,17 @@ input[type="radio"]:checked::after {
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: var(--accent-grad);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(255, 42, 81, 0.25);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  background: linear-gradient(135deg, #ff4d6d 0%, #f43f5e 100%);
+  box-shadow: 0 4px 14px rgba(255, 42, 81, 0.4);
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .btn-secondary {

@@ -38,6 +38,10 @@ class WelcomeMessageRequest(BaseModel):
     message: str
 
 
+class HelpMessageRequest(BaseModel):
+    message: str
+
+
 @router.get("/config")
 async def get_telegram_config(
     session: AsyncSession = Depends(get_db),
@@ -198,6 +202,44 @@ async def reset_welcome_message(
 ):
     """Reset the /start welcome message template to default."""
     msg = await SettingService.reset_welcome_message(
+        session=session,
+        admin_username=admin.get("sub", "admin"),
+    )
+    return {"message": msg, "status": "reset"}
+
+
+@router.get("/help-message")
+async def get_help_message(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Retrieve the current active /help message template."""
+    msg = await SettingService.get_help_message(session)
+    return {"message": msg}
+
+
+@router.post("/help-message")
+async def save_help_message(
+    req: HelpMessageRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Save a validated custom /help message template."""
+    msg = await SettingService.save_help_message(
+        message=req.message,
+        session=session,
+        admin_username=admin.get("sub", "admin"),
+    )
+    return {"message": msg, "status": "saved"}
+
+
+@router.post("/help-message/reset")
+async def reset_help_message(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Reset the /help message template to default."""
+    msg = await SettingService.reset_help_message(
         session=session,
         admin_username=admin.get("sub", "admin"),
     )

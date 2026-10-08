@@ -282,6 +282,14 @@ class YtDlpService:
             if not height or not isinstance(height, int) or height <= 0:
                 continue
 
+            # Exclude resolutions lower than 144p
+            width = f.get("width")
+            if height < 144:
+                continue
+            if isinstance(width, int) and width > 0 and height > width and width < 144:
+                # Vertical video where effective resolution (width) is lower than 144p
+                continue
+
             # If the video has H264/H265 formats, only include resolutions that actually have H264 or H265
             if has_any_h264_or_h265:
                 vcodec_lower = str(vcodec).lower()
@@ -362,9 +370,10 @@ class YtDlpService:
                 continue
             h = f.get("height")
             w = f.get("width")
-            if h and isinstance(h, int) and h > 0:
+            if h and isinstance(h, int) and h >= 144:
                 if w and isinstance(w, int) and w > 0 and h > w:
-                    labels[h] = f"{w}p"
+                    if w >= 144:
+                        labels[h] = f"{w}p"
                 elif h not in labels:
                     labels[h] = f"{h}p"
         return labels
