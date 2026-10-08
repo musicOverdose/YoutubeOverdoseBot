@@ -207,7 +207,8 @@ class ThumbnailService:
         """
         If an image is horizontal (w > h) but represents vertical content (e.g. YouTube Shorts 16:9 thumbnail
         with black side pillarboxes), crops the horizontal margins to match the vertical aspect ratio.
-        Uses safe inward insets to guarantee zero black border/pillarbox lines on left or right edges.
+        Uses safe inward insets to guarantee zero black border/pillarbox lines on left or right edges,
+        and resizes to target_w x h to preserve exact mathematical aspect ratio.
         """
         w, h = img.size
         current_ratio = w / float(h)
@@ -232,7 +233,10 @@ class ThumbnailService:
             left = max(0, int(math.ceil(raw_left)))
             right = min(w, int(math.floor(raw_right)))
 
-        return img.crop((left, 0, right, h))
+        cropped = img.crop((left, 0, right, h))
+        if cropped.size != (target_w, h):
+            cropped = cropped.resize((target_w, h), Image.Resampling.LANCZOS)
+        return cropped
 
     @classmethod
     def process_image_file(
@@ -240,6 +244,7 @@ class ThumbnailService:
         source_image_path: str,
         output_thumb_path: str,
         is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
     ) -> bool:
         """
         Opens source_image_path (JPEG, WebP, PNG), optionally crops horizontal pillarboxes
@@ -254,8 +259,9 @@ class ThumbnailService:
             with Image.open(source_image_path) as img:
                 img = img.convert("RGB")
                 if is_vertical and img.width > img.height:
-                    logger.info("Cropping 16:9 pillarboxes for vertical content from: %s", source_image_path)
-                    img = cls.crop_vertical_pillarbox(img)
+                    ratio = target_ratio or (9 / 16)
+                    logger.info("Cropping 16:9 pillarboxes for vertical content (ratio=%.4f) from: %s", ratio, source_image_path)
+                    img = cls.crop_vertical_pillarbox(img, target_ratio=ratio)
 
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
@@ -430,6 +436,7 @@ class ThumbnailService:
         source_thumb_urls: Optional[List[str]] = None,
         duration: Optional[int] = None,
         is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
     ) -> bool:
         """
         Orchestrates thumbnail preparation:
@@ -437,7 +444,7 @@ class ThumbnailService:
            (>= 1280x720 or vertical >= 720x1280), processes it immediately.
         2. If local thumbnail is low-resolution (< 1280x720), tries candidate URLs first
            to obtain official HD creator artwork (e.g. 1080p maxresdefault or 720p hq720).
-           For vertical videos, automatically crops horizontal pillarboxes to 9:16.
+           For vertical videos, automatically crops horizontal pillarboxes to target_ratio (e.g. 9:16).
         3. Falls back to local thumbnail if candidate URLs are unreachable.
         4. Falls back to native-resolution FFmpeg frame extraction only if no official artwork exists.
         """
@@ -454,7 +461,7 @@ class ThumbnailService:
 
         if local_is_hd:
             logger.info("Preparing thumbnail using local HD official YouTube artwork: %s", source_thumb_path)
-            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical)
+            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical, target_ratio=target_ratio)
             if ok:
                 return True
             logger.warning("Failed processing local HD thumbnail; checking candidate URLs")
@@ -473,7 +480,7 @@ class ThumbnailService:
                 logger.info("Downloading candidate high-res YouTube thumbnail from: %s", url)
                 dl_ok = await cls.download_thumbnail_image(url, temp_thumb)
                 if dl_ok:
-                    ok = cls.process_image_file(temp_thumb, output_thumb_path, is_vertical=is_vertical)
+                    ok = cls.process_image_file(temp_thumb, output_thumb_path, is_vertical=is_vertical, target_ratio=target_ratio)
                     if ok:
                         logger.info("Successfully prepared HD thumbnail from candidate URL: %s", url)
                         return True
@@ -487,7 +494,7 @@ class ThumbnailService:
         # Step 3: Fallback to local thumbnail if candidate URLs failed (even if lower resolution)
         if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
             logger.info("Candidate URLs unreachable; falling back to local thumbnail: %s", source_thumb_path)
-            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical)
+            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical, target_ratio=target_ratio)
             if ok:
                 return True
 

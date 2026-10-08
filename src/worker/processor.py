@@ -435,11 +435,12 @@ class JobProcessor:
                     except Exception as meta_e:
                         logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
 
-                    # 3. Generate high-fidelity JPEG thumbnail (official artwork cropped to 9:16 for shorts, or landscape)
+                    # 3. Generate high-fidelity JPEG thumbnail (official artwork cropped to exact aspect ratio for shorts, or landscape)
                     thumb_desc = "Processing official vertical cover..." if is_vertical else "Processing official creator artwork..."
                     await notifier.update("🖼️", "Preparing thumbnail...", thumb_desc, force=True)
                     thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                     thumb_ok = False
+                    target_ratio = (width / float(height)) if is_vertical and height > 0 else None
                     try:
                         thumb_ok = await ThumbnailService.prepare_video_thumbnail(
                             video_path=output_file,
@@ -448,6 +449,7 @@ class JobProcessor:
                             source_thumb_urls=candidate_thumb_urls,
                             duration=duration,
                             is_vertical=is_vertical,
+                            target_ratio=target_ratio,
                         )
                     except Exception as thumb_err:
                         logger.warning("Thumbnail generation error: %s", thumb_err)
