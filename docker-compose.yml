@@ -27,7 +27,7 @@ services:
     image: redis:7-alpine
     container_name: ytdl_redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --no-appendfsync-on-rewrite yes
     volumes:
       - redis_data:/data
     healthcheck:

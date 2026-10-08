@@ -2,11 +2,13 @@ import uuid
 from aiogram import Bot, Router
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
+from src.bot.handlers.codec_handler import safe_callback_answer
 from src.bot.keyboards import build_must_join_keyboard, build_queue_status_keyboard, build_subtitle_keyboard
 from src.core.config import settings
 from src.core.constants import DeliveryStatus, JobStatus, OperationType
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 from src.models.job import Job
 from src.models.job_request import JobRequest
 from src.services.ai_service import AIService
@@ -33,14 +35,16 @@ async def on_subtitle_menu(callback: CallbackQuery, bot: Bot):
         info = await YtDlpService.extract_metadata(canonical_url)
     except Exception as e:
         logger.error(f"Error fetching metadata for subtitles: {e}")
-        await callback.answer("Could not fetch subtitle options.", show_alert=True)
+        await safe_callback_answer(callback, "Could not fetch subtitle options.", show_alert=True)
         return
 
     has_english, _, _ = YtDlpService.check_english_subtitles(info)
     has_persian, _, _ = YtDlpService.find_persian_subtitles(info)
     if not has_english and not has_persian:
-        await callback.answer(
-            "No subtitles are available for this video.", show_alert=True
+        await safe_callback_answer(
+            callback,
+            "No subtitles are available for this video.",
+            show_alert=True,
         )
         return
 
@@ -56,7 +60,7 @@ async def on_subtitle_menu(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logger.warning(f"Error editing subtitle menu: {e}")
 
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @subtitle_router.callback_query(lambda c: c.data and c.data.startswith("sub:"))
@@ -65,15 +69,24 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
     chat_id = callback.message.chat.id
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("Invalid parameters.", show_alert=True)
+        await safe_callback_answer(callback, "Invalid parameters.", show_alert=True)
         return
 
     _, source_id, lang = parts
     if lang not in ("EN", "FA"):
-        await callback.answer("Unsupported subtitle language.", show_alert=True)
+        await safe_callback_answer(callback, "Unsupported subtitle language.", show_alert=True)
         return
 
     canonical_url = get_canonical_url(source_id)
+
+    menu_msg = callback.message
+    menu_msg_id = menu_msg.message_id if menu_msg else None
+
+    if menu_msg:
+        try:
+            await menu_msg.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.debug("Could not clear reply markup on subtitle select: %s", e)
 
     async with AsyncSessionLocal() as session:
         # 1. MUST-JOIN AUTHORIZATION (AUTHORITATIVE)
@@ -88,7 +101,8 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
                 has_persian = False
 
             if not has_persian and not AIService.is_configured():
-                await callback.answer(
+                await safe_callback_answer(
+                    callback,
                     "Persian AI translation is currently not configured and no native Persian subtitles exist.",
                     show_alert=True,
                 )
@@ -107,14 +121,19 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
                 bot, session, cached_entry, chat_id
             )
             if delivered:
+                if menu_msg:
+                    try:
+                        await menu_msg.delete()
+                    except Exception as del_err:
+                        logger.debug("Could not delete menu message on subtitle cache delivery: %s", del_err)
                 lang_name = "🇬🇧 English" if lang == "EN" else "🇮🇷 Persian"
-                await callback.answer(f"Delivered {lang_name} subtitle from cache! 💬")
+                await safe_callback_answer(callback, f"Delivered {lang_name} subtitle from cache! 💬")
                 return
 
         # 3. USER LIMITS
         allowed, limit_err = await QueueService.check_user_limits(session, user_id)
         if not allowed:
-            await callback.answer(limit_err, show_alert=True)
+            await safe_callback_answer(callback, limit_err, show_alert=True)
             return
 
         # 4. DUPLICATE JOB COALESCING
@@ -141,9 +160,17 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
                 user_id=user_id,
                 chat_id=chat_id,
                 delivery_status=DeliveryStatus.PENDING.value,
+                menu_message_id=menu_msg_id,
             )
             session.add(req)
             await session.commit()
+
+            if menu_msg_id:
+                try:
+                    r = get_redis_client()
+                    await r.set(f"job_request:menu_msg:{existing_job.id}:{user_id}", str(menu_msg_id), ex=86400)
+                except Exception as r_err:
+                    logger.debug("Failed saving menu_msg_id for subtitle: %s", r_err)
 
             pos = await QueueService.get_derived_position(existing_job.id, queue_type="SUBTITLE")
             pos_str = f"#{pos}" if pos else "In Progress"
@@ -159,7 +186,7 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
             )
             req.status_message_id = status_msg.message_id
             await session.commit()
-            await callback.answer("Added to queue!")
+            await safe_callback_answer(callback, "Added to queue!")
             return
 
         # 5. CREATE NEW SUBTITLE JOB
@@ -188,9 +215,17 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
             user_id=user_id,
             chat_id=chat_id,
             delivery_status=DeliveryStatus.PENDING.value,
+            menu_message_id=menu_msg_id,
         )
         session.add(req)
         await session.commit()
+
+        if menu_msg_id:
+            try:
+                r = get_redis_client()
+                await r.set(f"job_request:menu_msg:{job_id}:{user_id}", str(menu_msg_id), ex=86400)
+            except Exception as r_err:
+                logger.debug("Failed saving menu_msg_id for subtitle: %s", r_err)
 
         # Push to SUBTITLE queue
         position = await QueueService.push_job(job_id, queue_type="SUBTITLE")
@@ -207,4 +242,4 @@ async def on_subtitle_selected(callback: CallbackQuery, bot: Bot):
         req.status_message_id = status_msg.message_id
         await session.commit()
 
-    await callback.answer("Added to queue!")
+    await safe_callback_answer(callback, "Added to queue!")

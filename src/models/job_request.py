@@ -14,6 +14,7 @@ class JobRequest(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    menu_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     delivery_status: Mapped[str] = mapped_column(
         String(32), default=DeliveryStatus.PENDING.value, nullable=False
     )

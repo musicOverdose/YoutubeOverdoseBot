@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from src.core.config import settings
 from src.core.database import Base, engine
 from src.core.logger import setup_logger
@@ -31,6 +32,10 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database schema if needed...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE job_requests ADD COLUMN IF NOT EXISTS menu_message_id BIGINT;"))
+        except Exception as e:
+            logger.debug("Column menu_message_id addition check: %s", e)
 
     # Initialize or preserve admin credentials in PostgreSQL
     from src.services.auth_service import AuthService

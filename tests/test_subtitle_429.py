@@ -18,21 +18,21 @@ from src.services.ytdlp_service import (
 
 
 import src.services.ytdlp_service as ytdlp_mod
-from src.core.redis import get_redis_client
+import src.core.redis as redis_mod
 
 
 @pytest.fixture(autouse=True)
 async def reset_cooldown():
     ytdlp_mod._in_memory_subtitle_cooldown_until = 0.0
     try:
-        r = get_redis_client()
+        r = redis_mod.get_redis_client()
         await r.delete(ytdlp_mod.SUBTITLE_COOLDOWN_KEY)
     except Exception:
         pass
     yield
     ytdlp_mod._in_memory_subtitle_cooldown_until = 0.0
     try:
-        r = get_redis_client()
+        r = redis_mod.get_redis_client()
         await r.delete(ytdlp_mod.SUBTITLE_COOLDOWN_KEY)
     except Exception:
         pass

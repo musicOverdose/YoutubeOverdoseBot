@@ -470,7 +470,7 @@ class JobProcessor:
                     await session.commit()
                     await notifier.update("📤", "Uploading...", "Sending video to Telegram...", force=True)
 
-                    caption_text = f"🎬 <b>{job.title}</b>\n({target_codec} {job.resolution})"
+                    caption_text = f"🎬 <b>{job.title}</b>\n({job.resolution})"
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
                         api_mode=api_mode,
@@ -914,6 +914,31 @@ class JobProcessor:
                                         message_id=req.status_message_id,
                                         text="✅ <b>Download complete! Delivered above.</b>",
                                     )
+                                except Exception:
+                                    pass
+
+                            # Delete keyboard message after sending video / delivering media
+                            menu_msg_id = getattr(req, "menu_message_id", None)
+                            if not menu_msg_id:
+                                try:
+                                    r = get_redis_client()
+                                    val = await r.get(f"job_request:menu_msg:{job_id}:{req.user_id}")
+                                    if val:
+                                        menu_msg_id = int(val)
+                                except Exception:
+                                    pass
+
+                            if menu_msg_id:
+                                try:
+                                    await bot.delete_message(
+                                        chat_id=req.chat_id,
+                                        message_id=int(menu_msg_id),
+                                    )
+                                except Exception as del_err:
+                                    logger.debug("Could not delete keyboard message %s for user %s: %s", menu_msg_id, req.user_id, del_err)
+                                try:
+                                    r = get_redis_client()
+                                    await r.delete(f"job_request:menu_msg:{job_id}:{req.user_id}")
                                 except Exception:
                                     pass
                         else:

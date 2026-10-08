@@ -1,6 +1,6 @@
 from aiogram import Bot, Router
 from aiogram.types import CallbackQuery
-from src.bot.handlers.codec_handler import enqueue_video_job
+from src.bot.handlers.codec_handler import enqueue_video_job, safe_callback_answer
 from src.bot.keyboards import build_must_join_keyboard, build_quality_keyboard
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
@@ -21,14 +21,14 @@ async def on_quality_selected(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("Invalid request.", show_alert=True)
+        await safe_callback_answer(callback, "Invalid request.", show_alert=True)
         return
 
     _, source_id, height_str = parts
     try:
         height = int(height_str)
     except ValueError:
-        await callback.answer("Invalid resolution.", show_alert=True)
+        await safe_callback_answer(callback, "Invalid resolution.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -74,7 +74,7 @@ async def on_cancel_request(callback: CallbackQuery, bot: Bot):
         except Exception:
             pass
 
-    await callback.answer("Request cancelled.")
+    await safe_callback_answer(callback, "Request cancelled.")
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("back_q:"))
@@ -97,7 +97,7 @@ async def on_back_to_quality(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_reply_markup(reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Error going back to quality menu: {e}")
-        await callback.answer("Could not refresh quality options.", show_alert=True)
+        await safe_callback_answer(callback, "Could not refresh quality options.", show_alert=True)
         return
 
-    await callback.answer()
+    await safe_callback_answer(callback)

@@ -1,6 +1,7 @@
 import uuid
 from typing import Any, Dict, Optional
 from aiogram import Bot, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from src.bot.keyboards import build_must_join_keyboard, build_queue_status_keyboard
@@ -8,6 +9,7 @@ from src.core.config import settings
 from src.core.constants import DeliveryStatus, JobStatus, OperationType
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 from src.models.job import Job
 from src.models.job_request import JobRequest
 from src.services.cache_service import CacheService
@@ -20,22 +22,48 @@ logger = setup_logger("codec_handler")
 codec_router = Router()
 
 
+async def safe_callback_answer(
+    callback: CallbackQuery,
+    text: Optional[str] = None,
+    show_alert: bool = False,
+) -> bool:
+    """Safely answers callback query suppressing TelegramBadRequest (e.g. query is too old)."""
+    try:
+        if text is not None:
+            if show_alert:
+                await callback.answer(text, show_alert=True)
+            else:
+                await callback.answer(text)
+        else:
+            await callback.answer()
+        return True
+    except TelegramBadRequest as e:
+        logger.debug("Suppressed TelegramBadRequest answering callback query: %s", e)
+        return False
+    except TelegramAPIError as e:
+        logger.debug("Suppressed TelegramAPIError answering callback query: %s", e)
+        return False
+    except Exception as e:
+        logger.warning("Unexpected error answering callback query: %s", e)
+        return False
+
+
 @codec_router.callback_query(lambda c: c.data and c.data.startswith("c:"))
 async def on_codec_selected(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split(":")
     if len(parts) != 4:
-        await callback.answer("Invalid parameters.", show_alert=True)
+        await safe_callback_answer(callback, "Invalid parameters.", show_alert=True)
         return
 
     _, source_id, codec, height_str = parts
     try:
         height = int(height_str)
     except ValueError:
-        await callback.answer("Invalid height.", show_alert=True)
+        await safe_callback_answer(callback, "Invalid height.", show_alert=True)
         return
 
     if codec not in ("H264", "H265"):
-        await callback.answer("Unsupported video codec.", show_alert=True)
+        await safe_callback_answer(callback, "Unsupported video codec.", show_alert=True)
         return
 
     await enqueue_video_job(bot, callback, source_id, height, codec)
@@ -61,6 +89,16 @@ async def enqueue_video_job(
     chat_id = callback.message.chat.id
     canonical_url = get_canonical_url(source_id)
 
+    menu_msg = callback.message
+    menu_msg_id = menu_msg.message_id if menu_msg else None
+
+    # Clear inline keyboard on the preview message immediately so user cannot double-click
+    if menu_msg:
+        try:
+            await menu_msg.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.debug("Could not clear reply markup on quality click: %s", e)
+
     async with AsyncSessionLocal() as session:
         # 1. MUST-JOIN AUTHORIZATION (AUTHORITATIVE)
         if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
@@ -72,7 +110,8 @@ async def enqueue_video_job(
                 info = await YtDlpService.extract_metadata(canonical_url)
             available_heights = YtDlpService.get_available_resolutions(info)
             if height not in available_heights:
-                await callback.answer(
+                await safe_callback_answer(
+                    callback,
                     f"❌ Resolution {height}p is no longer available. Please choose from current qualities.",
                     show_alert=True,
                 )
@@ -142,11 +181,11 @@ async def enqueue_video_job(
                 f"Maximum allowed: {formatted_limit}\n\n"
                 f"Please select a lower quality."
             )
-            await callback.answer(rejection_alert, show_alert=True)
+            await safe_callback_answer(callback, rejection_alert, show_alert=True)
             try:
                 await callback.message.answer(
                     f"❌ <b>Video too large for upload</b>\n\n"
-                    f"🎬 <b>{codec} • {height}p</b>\n"
+                    f"🎬 <b>{height}p</b>\n"
                     f"📦 {size_prefix}<b>{formatted_size}</b>\n"
                     f"⚠️ Maximum allowed: <b>{formatted_limit}</b>\n\n"
                     f"Please select a lower quality.",
@@ -174,7 +213,12 @@ async def enqueue_video_job(
                 bot, session, cached_entry, chat_id
             )
             if delivered:
-                await callback.answer("Delivered from cache! 🚀")
+                if menu_msg:
+                    try:
+                        await menu_msg.delete()
+                    except Exception as del_err:
+                        logger.debug("Could not delete menu message on cache delivery: %s", del_err)
+                await safe_callback_answer(callback, "Delivered from cache! 🚀")
                 return
             else:
                 logger.warning(f"Cache delivery failed: {err}. Falling through to download.")
@@ -182,7 +226,7 @@ async def enqueue_video_job(
         # 5. ENFORCE PER-USER LIMITS
         allowed_user, limit_err = await QueueService.check_user_limits(session, user_id)
         if not allowed_user:
-            await callback.answer(limit_err, show_alert=True)
+            await safe_callback_answer(callback, limit_err, show_alert=True)
             return
 
         # 6. DUPLICATE JOB COALESCING
@@ -209,9 +253,17 @@ async def enqueue_video_job(
                 user_id=user_id,
                 chat_id=chat_id,
                 delivery_status=DeliveryStatus.PENDING.value,
+                menu_message_id=menu_msg_id,
             )
             session.add(req)
             await session.commit()
+
+            if menu_msg_id:
+                try:
+                    r = get_redis_client()
+                    await r.set(f"job_request:menu_msg:{existing_job.id}:{user_id}", str(menu_msg_id), ex=86400)
+                except Exception as r_err:
+                    logger.debug("Failed saving menu_msg_id to redis: %s", r_err)
 
             pos = await QueueService.get_derived_position(existing_job.id, queue_type="VIDEO")
             pos_str = f"#{pos}" if pos else "In Progress"
@@ -220,7 +272,7 @@ async def enqueue_video_job(
 
             status_msg = await callback.message.answer(
                 f"⏳ <b>Attached to existing job</b>\n"
-                f"🎬 <b>{codec} • {res_display}</b>\n"
+                f"🎬 <b>{res_display}</b>\n"
                 f"{size_line}\n"
                 f"Position: {pos_str}\n"
                 f"Active jobs: {active_count} / {limit}",
@@ -228,7 +280,7 @@ async def enqueue_video_job(
             )
             req.status_message_id = status_msg.message_id
             await session.commit()
-            await callback.answer("Added to queue!")
+            await safe_callback_answer(callback, "Added to queue!")
             return
 
         # 7. CREATE NEW JOB & QUEUE
@@ -253,9 +305,17 @@ async def enqueue_video_job(
             user_id=user_id,
             chat_id=chat_id,
             delivery_status=DeliveryStatus.PENDING.value,
+            menu_message_id=menu_msg_id,
         )
         session.add(req)
         await session.commit()
+
+        if menu_msg_id:
+            try:
+                r = get_redis_client()
+                await r.set(f"job_request:menu_msg:{job_id}:{user_id}", str(menu_msg_id), ex=86400)
+            except Exception as r_err:
+                logger.debug("Failed saving menu_msg_id to redis: %s", r_err)
 
         # Push to VIDEO queue
         position = await QueueService.push_job(job_id, queue_type="VIDEO")
@@ -264,7 +324,7 @@ async def enqueue_video_job(
 
         status_msg = await callback.message.answer(
             f"⏳ <b>Added to queue</b>\n"
-            f"🎬 <b>{codec} • {res_display}</b>\n"
+            f"🎬 <b>{res_display}</b>\n"
             f"{size_line}\n"
             f"Position: #{position}\n"
             f"Active: {active_count} / {limit}",
@@ -273,4 +333,4 @@ async def enqueue_video_job(
         req.status_message_id = status_msg.message_id
         await session.commit()
 
-    await callback.answer("Added to queue!")
+    await safe_callback_answer(callback, "Added to queue!")

@@ -83,12 +83,29 @@ class MockRedis:
             if nx and key in self.strings:
                 return False
             self.strings[key] = str(value)
+            if ex is not None:
+                if not hasattr(self, "ttls"):
+                    self.ttls = {}
+                self.ttls[key] = int(ex)
             return True
+
+    async def ttl(self, key: str) -> int:
+        async with self.lock:
+            if not hasattr(self, "ttls"):
+                self.ttls = {}
+            if key in self.ttls:
+                return self.ttls[key]
+            if key in self.strings or key in self.lists or key in self.sets:
+                return -1
+            return -2
 
     async def delete(self, *keys: str) -> int:
         async with self.lock:
+            if not hasattr(self, "ttls"):
+                self.ttls = {}
             deleted = 0
             for k in keys:
+                self.ttls.pop(k, None)
                 if k in self.strings:
                     del self.strings[k]
                     deleted += 1
