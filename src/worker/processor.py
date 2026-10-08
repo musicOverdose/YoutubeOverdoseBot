@@ -416,9 +416,10 @@ class JobProcessor:
                     # Must fail cleanly with clear error if metadata cannot be determined
                     try:
                         duration, width, height = await FFmpegService.extract_video_metadata(output_file)
+                        is_vertical = (height > width)
                         logger.info(
-                            "Extracted metadata for final video: duration=%ds, width=%d, height=%d",
-                            duration, width, height
+                            "Extracted metadata for final video: duration=%ds, width=%d, height=%d (is_vertical=%s)",
+                            duration, width, height, is_vertical
                         )
                     except Exception as meta_err:
                         logger.error("Failed to extract valid video metadata from final file: %s", meta_err)
@@ -433,8 +434,9 @@ class JobProcessor:
                         except Exception as meta_e:
                             logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
 
-                    # 3. Generate high-fidelity JPEG thumbnail (official artwork prioritized, fallback to frame)
-                    await notifier.update("🖼️", "Preparing thumbnail...", "Processing official creator artwork...", force=True)
+                    # 3. Generate high-fidelity JPEG thumbnail (native frame for vertical shorts, official artwork for landscape)
+                    thumb_desc = "Extracting native vertical frame..." if is_vertical else "Processing official creator artwork..."
+                    await notifier.update("🖼️", "Preparing thumbnail...", thumb_desc, force=True)
                     thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                     thumb_ok = False
                     try:
@@ -444,6 +446,7 @@ class JobProcessor:
                             source_thumb_path=found_thumb_file,
                             source_thumb_urls=candidate_thumb_urls,
                             duration=duration,
+                            is_vertical=is_vertical,
                         )
                     except Exception as thumb_err:
                         logger.warning("Thumbnail generation error: %s", thumb_err)

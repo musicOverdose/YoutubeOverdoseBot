@@ -450,6 +450,25 @@ class FFmpegService:
         except (ValueError, TypeError) as e:
             raise ValueError(f"Invalid video dimensions in {file_path}: width={raw_width}, height={raw_height}") from e
 
+        # Inspect stream rotation metadata (e.g. smartphone recordings or displaymatrix)
+        tags = v_stream.get("tags") or {}
+        rotate_val = tags.get("rotate")
+        if rotate_val is None:
+            side_data_list = v_stream.get("side_data_list") or []
+            for sd in side_data_list:
+                if isinstance(sd, dict) and "rotation" in sd:
+                    rotate_val = sd.get("rotation")
+                    break
+
+        if rotate_val is not None:
+            try:
+                rot_deg = abs(int(float(rotate_val)))
+                if rot_deg in (90, 270):
+                    logger.info("Video stream has %d deg rotation tag. Swapping display dimensions.", rot_deg)
+                    width, height = height, width
+            except (ValueError, TypeError):
+                pass
+
         if width <= 0 or height <= 0:
             raise ValueError(f"Video dimensions must be positive integers: width={width}, height={height}")
 

@@ -155,15 +155,37 @@ class ThumbnailService:
         return False
 
     @classmethod
+    def crop_vertical_pillarbox(cls, img: Image.Image, target_ratio: float = 9 / 16) -> Image.Image:
+        """
+        If an image is horizontal (w > h) but represents vertical content (e.g. YouTube Shorts 16:9 thumbnail
+        with black side pillarboxes), crops the horizontal margins to match the vertical aspect ratio.
+        """
+        w, h = img.size
+        current_ratio = w / float(h)
+        if current_ratio <= 1.0:
+            return img  # Already portrait or square
+
+        # Target width based on target vertical ratio
+        target_w = int(round(h * target_ratio))
+        if target_w >= w:
+            return img
+
+        # Center crop horizontally
+        left = max(0, (w - target_w) // 2)
+        right = left + target_w
+        return img.crop((left, 0, right, h))
+
+    @classmethod
     def process_image_file(
         cls,
         source_image_path: str,
         output_thumb_path: str,
+        is_vertical: bool = False,
     ) -> bool:
         """
-        Opens source_image_path (JPEG, WebP, PNG), scales it with Lanczos resampling
-        to fit inside MAX_DIMENSION x MAX_DIMENSION preserving aspect ratio,
-        and saves as a compliant JPEG.
+        Opens source_image_path (JPEG, WebP, PNG), optionally crops horizontal pillarboxes
+        if content is vertical, scales it with Lanczos resampling to fit inside
+        MAX_DIMENSION x MAX_DIMENSION preserving aspect ratio, and saves as a compliant JPEG.
         """
         if not os.path.exists(source_image_path) or os.path.getsize(source_image_path) == 0:
             return False
@@ -171,6 +193,10 @@ class ThumbnailService:
         try:
             with Image.open(source_image_path) as img:
                 img = img.convert("RGB")
+                if is_vertical and img.width > img.height:
+                    logger.info("Cropping 16:9 pillarboxes for vertical content from: %s", source_image_path)
+                    img = cls.crop_vertical_pillarbox(img)
+
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
                     src_w, src_h, cls.MAX_DIMENSION, cls.MAX_DIMENSION
@@ -191,6 +217,37 @@ class ThumbnailService:
         except Exception as e:
             logger.warning("Error processing thumbnail image %s: %s", source_image_path, e)
             return False
+
+    @classmethod
+    async def create_vertical_preview_photo(
+        cls,
+        thumbnail_url: str,
+        output_preview_path: str,
+    ) -> bool:
+        """
+        Downloads a remote thumbnail URL and crops the 16:9 pillarbox black bars
+        to produce a native 9:16 vertical photo for Telegram preview.
+        """
+        temp_dl = output_preview_path + ".dl.tmp"
+        try:
+            dl_ok = await cls.download_thumbnail_image(thumbnail_url, temp_dl)
+            if not dl_ok or not os.path.exists(temp_dl):
+                return False
+            with Image.open(temp_dl) as img:
+                img = img.convert("RGB")
+                if img.width > img.height:
+                    img = cls.crop_vertical_pillarbox(img)
+                img.save(output_preview_path, "JPEG", quality=92, optimize=True)
+                return os.path.exists(output_preview_path) and os.path.getsize(output_preview_path) > 0
+        except Exception as e:
+            logger.warning("Error creating vertical preview photo from %s: %s", thumbnail_url, e)
+            return False
+        finally:
+            if os.path.exists(temp_dl):
+                try:
+                    os.remove(temp_dl)
+                except OSError:
+                    pass
 
     @classmethod
     async def download_thumbnail_image(
@@ -310,17 +367,28 @@ class ThumbnailService:
         source_thumb_url: Optional[str] = None,
         source_thumb_urls: Optional[List[str]] = None,
         duration: Optional[int] = None,
+        is_vertical: bool = False,
     ) -> bool:
         """
-        Orchestrates thumbnail preparation with strict priority:
-        1. Local official YouTube thumbnail file (from yt-dlp writethumbnail).
-        2. Remote official YouTube thumbnail URLs (ordered by highest quality, with 404 fallback).
-        3. Fallback native-resolution frame extraction via FFmpeg.
+        Orchestrates thumbnail preparation:
+        For vertical videos (Shorts):
+          Extracts native vertical video frame directly via FFmpeg (guaranteeing exact
+          vertical geometry with zero black bars / letterboxing), falling back to cropped official artwork.
+        For normal landscape videos:
+          Prioritizes official YouTube artwork, falling back to FFmpeg frame extraction.
         """
+        # For vertical videos, native frame extraction guarantees pure 9:16 vertical thumbnail with no black bars
+        if is_vertical and os.path.exists(video_path):
+            logger.info("Vertical video detected. Extracting native vertical video frame via FFmpeg...")
+            ok = await cls.extract_frame_fallback(video_path, output_thumb_path, duration)
+            if ok:
+                return True
+            logger.warning("FFmpeg frame extraction for vertical video failed, falling back to official artwork")
+
         # Priority 1: Check existing local official thumbnail file
         if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
             logger.info("Preparing thumbnail using local official YouTube artwork: %s", source_thumb_path)
-            ok = cls.process_image_file(source_thumb_path, output_thumb_path)
+            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical)
             if ok:
                 return True
             logger.warning("Failed processing local official thumbnail; checking candidate URLs")
@@ -338,7 +406,7 @@ class ThumbnailService:
                 logger.info("Downloading official YouTube thumbnail from: %s", url)
                 dl_ok = await cls.download_thumbnail_image(url, temp_thumb)
                 if dl_ok:
-                    ok = cls.process_image_file(temp_thumb, output_thumb_path)
+                    ok = cls.process_image_file(temp_thumb, output_thumb_path, is_vertical=is_vertical)
                     if ok:
                         logger.info("Successfully prepared thumbnail from official URL: %s", url)
                         return True

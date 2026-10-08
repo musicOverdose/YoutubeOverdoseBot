@@ -6,19 +6,22 @@ from src.models.channel import RequiredChannel
 def build_quality_keyboard(
     source_id: str,
     available_heights: List[int],
+    resolution_labels: Optional[dict] = None,
 ) -> InlineKeyboardMarkup:
     """
-    STRICT QUALITY-FIRST MENU:
-    Displays only actual source heights + MP3 + Subtitle.
-    Does NOT show H.264 or H.265 at this stage!
+    QUALITY SELECTION MENU:
+    Displays available video resolutions + MP3 + Subtitle + Cancel button.
+    Supports friendly resolution labels (e.g. 1080p for 1080x1920 vertical videos).
     """
     keyboard: List[List[InlineKeyboardButton]] = []
+    labels = resolution_labels or {}
 
     # Pair video resolutions two per row
     row: List[InlineKeyboardButton] = []
     for height in available_heights:
+        label = labels.get(height, f"{height}p")
         btn = InlineKeyboardButton(
-            text=f"{height}p",
+            text=f"🎬 {label}",
             callback_data=f"q:{source_id}:{height}",
         )
         row.append(btn)
@@ -28,12 +31,17 @@ def build_quality_keyboard(
     if row:
         keyboard.append(row)
 
-    # Bottom utility row
-    bottom_row = [
+    # Audio & Subtitle utility row
+    utility_row = [
         InlineKeyboardButton(text="🎵 MP3", callback_data=f"aud:{source_id}:MP3"),
         InlineKeyboardButton(text="💬 Subtitle", callback_data=f"sub_menu:{source_id}"),
     ]
-    keyboard.append(bottom_row)
+    keyboard.append(utility_row)
+
+    # Cancel request button
+    keyboard.append([
+        InlineKeyboardButton(text="❌ Cancel", callback_data="req_cancel"),
+    ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -146,12 +154,12 @@ def build_must_join_keyboard(
 def build_queue_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
     """
     Interactive buttons on active/queued jobs:
-    [📊 Queue Status] [❌ Cancel]
+    [📊 Queue Status]
+    (No cancel button for active downloads per user constraint)
     """
     keyboard = [
         [
             InlineKeyboardButton(text="📊 Queue Status", callback_data=f"q_stat:{job_id}"),
-            InlineKeyboardButton(text="❌ Cancel", callback_data=f"q_cancel:{job_id}"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

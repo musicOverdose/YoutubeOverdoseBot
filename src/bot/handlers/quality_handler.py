@@ -1,6 +1,7 @@
 from aiogram import Bot, Router
 from aiogram.types import CallbackQuery
-from src.bot.keyboards import build_codec_keyboard, build_must_join_keyboard, build_quality_keyboard
+from src.bot.handlers.codec_handler import enqueue_video_job
+from src.bot.keyboards import build_must_join_keyboard, build_quality_keyboard
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.services.must_join_service import MustJoinService
@@ -12,6 +13,11 @@ quality_router = Router()
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("q:"))
 async def on_quality_selected(callback: CallbackQuery, bot: Bot):
+    """
+    1-TAP DOWNLOAD EXPERIENCE:
+    Automatically selects the best available video codec for the chosen resolution
+    and immediately queues or delivers the video without prompting for codec.
+    """
     user_id = callback.from_user.id
     parts = callback.data.split(":")
     if len(parts) != 3:
@@ -32,26 +38,43 @@ async def on_quality_selected(callback: CallbackQuery, bot: Bot):
     canonical_url = get_canonical_url(source_id)
     try:
         info = await YtDlpService.extract_metadata(canonical_url)
-        available_codecs = YtDlpService.get_available_codecs_for_height(info, height)
+        codec = YtDlpService.auto_select_codec(info, height)
     except Exception as e:
-        logger.error(f"Error checking available codecs for {source_id} at {height}p: {e}")
-        available_codecs = ["H264"]
+        logger.error(f"Error inspecting metadata for {source_id} at {height}p: {e}")
+        codec = "H264"
+        info = None
 
-    if not available_codecs:
-        await callback.answer(
-            f"❌ Neither H.264 nor H.265 source stream is available for {height}p on YouTube.",
-            show_alert=True,
-        )
-        return
+    # Directly enqueue with auto-selected codec (1-tap flow)
+    await enqueue_video_job(
+        bot=bot,
+        callback=callback,
+        source_id=source_id,
+        height=height,
+        codec=codec,
+        info=info,
+    )
 
-    # Second step: switch to Codec Selection on the SAME message
-    codec_keyboard = build_codec_keyboard(source_id, height, available_codecs)
+
+@quality_router.callback_query(lambda c: c.data == "req_cancel")
+async def on_cancel_request(callback: CallbackQuery, bot: Bot):
+    """
+    Dismisses/cancels the unconfirmed request message preview.
+    (Note: Active/queued downloads cannot be cancelled by users per design).
+    """
     try:
-        await callback.message.edit_reply_markup(reply_markup=codec_keyboard)
+        await callback.message.delete()
     except Exception as e:
-        logger.warning(f"Error updating keyboard to codec selection: {e}")
+        logger.debug(f"Could not delete request message on cancel: {e}. Editing caption.")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            if callback.message.caption:
+                await callback.message.edit_caption(caption="❌ <i>Request cancelled.</i>")
+            elif callback.message.text:
+                await callback.message.edit_text(text="❌ <i>Request cancelled.</i>")
+        except Exception:
+            pass
 
-    await callback.answer()
+    await callback.answer("Request cancelled.")
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("back_q:"))
@@ -67,7 +90,10 @@ async def on_back_to_quality(callback: CallbackQuery, bot: Bot):
     try:
         info = await YtDlpService.extract_metadata(canonical_url)
         available_heights = YtDlpService.get_available_resolutions(info)
-        keyboard = build_quality_keyboard(source_id, available_heights)
+        resolution_labels = YtDlpService.get_resolution_labels(info)
+        keyboard = build_quality_keyboard(
+            source_id, available_heights, resolution_labels=resolution_labels
+        )
         await callback.message.edit_reply_markup(reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Error going back to quality menu: {e}")

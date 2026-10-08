@@ -1,4 +1,5 @@
 import uuid
+from typing import Any, Dict, Optional
 from aiogram import Bot, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
@@ -21,8 +22,6 @@ codec_router = Router()
 
 @codec_router.callback_query(lambda c: c.data and c.data.startswith("c:"))
 async def on_codec_selected(callback: CallbackQuery, bot: Bot):
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
     parts = callback.data.split(":")
     if len(parts) != 4:
         await callback.answer("Invalid parameters.", show_alert=True)
@@ -39,6 +38,27 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
         await callback.answer("Unsupported video codec.", show_alert=True)
         return
 
+    await enqueue_video_job(bot, callback, source_id, height, codec)
+
+async def enqueue_video_job(
+    bot: Bot,
+    callback: CallbackQuery,
+    source_id: str,
+    height: int,
+    codec: str,
+    info: Optional[dict] = None,
+) -> None:
+    """
+    Core video queuing pipeline:
+    1. Validates exact quality and codec against source metadata
+    2. Calculates expected video size and enforces pre-download file size limit
+    3. Checks cache for instant delivery
+    4. Enforces per-user concurrency limits
+    5. Coalesces duplicate requests or creates new job
+    6. Enqueues job to VIDEO queue
+    """
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
     canonical_url = get_canonical_url(source_id)
 
     async with AsyncSessionLocal() as session:
@@ -48,7 +68,8 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
 
         # 2. EXACT QUALITY & CODEC VALIDATION & STALE BUTTON CHECK
         try:
-            info = await YtDlpService.extract_metadata(canonical_url)
+            if info is None:
+                info = await YtDlpService.extract_metadata(canonical_url)
             available_heights = YtDlpService.get_available_resolutions(info)
             if height not in available_heights:
                 await callback.answer(
@@ -59,16 +80,19 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
 
             available_codecs = YtDlpService.get_available_codecs_for_height(info, height)
             if codec not in available_codecs:
-                await callback.answer(
-                    f"❌ Codec {codec} is not available for {height}p from YouTube.",
-                    show_alert=True,
-                )
-                return
+                # If auto-selected codec isn't in specific tag, fall back to any available or H264
+                if available_codecs:
+                    codec = available_codecs[0]
+                else:
+                    codec = "H264"
 
             title = info.get("title", "YouTube Video")
+            res_labels = YtDlpService.get_resolution_labels(info)
+            res_display = res_labels.get(height, f"{height}p")
         except Exception as e:
             logger.error(f"Error fetching metadata for verification: {e}")
             title = "YouTube Video"
+            res_display = f"{height}p"
 
         # 3. PRE-DOWNLOAD FINAL FILE SIZE CHECK
         expected_bytes, size_source, size_details = YtDlpService.calculate_expected_video_size(
@@ -196,7 +220,7 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
 
             status_msg = await callback.message.answer(
                 f"⏳ <b>Attached to existing job</b>\n"
-                f"🎬 <b>{codec} • {height}p</b>\n"
+                f"🎬 <b>{codec} • {res_display}</b>\n"
                 f"{size_line}\n"
                 f"Position: {pos_str}\n"
                 f"Active jobs: {active_count} / {limit}",
@@ -217,7 +241,7 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
             title=title,
             operation=OperationType.VIDEO.value,
             output_codec=codec,
-            resolution=f"{height}p",
+            resolution=res_display,
             target_height=height,
             status=JobStatus.QUEUED.value,
             cache_key=cache_key,
@@ -240,7 +264,7 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
 
         status_msg = await callback.message.answer(
             f"⏳ <b>Added to queue</b>\n"
-            f"🎬 <b>{codec} • {height}p</b>\n"
+            f"🎬 <b>{codec} • {res_display}</b>\n"
             f"{size_line}\n"
             f"Position: #{position}\n"
             f"Active: {active_count} / {limit}",

@@ -309,6 +309,42 @@ class YtDlpService:
         return res
 
     @classmethod
+    def auto_select_codec(cls, info: Dict[str, Any], target_height: int) -> str:
+        """
+        Automatically selects the optimal available video codec for target_height.
+        Prioritizes H.264 (AVC) for instant stream-copying and universal compatibility.
+        Falls back to H.265 (HEVC) if available, or default H264.
+        """
+        codecs = cls.get_available_codecs_for_height(info, target_height)
+        if "H264" in codecs:
+            return "H264"
+        if "H265" in codecs:
+            return "H265"
+        return "H264"
+
+    @classmethod
+    def get_resolution_labels(cls, info: Dict[str, Any]) -> Dict[int, str]:
+        """
+        Maps each available format height to a friendly display label.
+        For vertical formats (height > width): uses width as the resolution label (e.g. 1920 -> '1080p').
+        For horizontal formats (width >= height): uses height (e.g. 1080 -> '1080p').
+        """
+        formats = info.get("formats", [])
+        labels: Dict[int, str] = {}
+        for f in formats:
+            vcodec = f.get("vcodec")
+            if not vcodec or vcodec == "none":
+                continue
+            h = f.get("height")
+            w = f.get("width")
+            if h and isinstance(h, int) and h > 0:
+                if w and isinstance(w, int) and w > 0 and h > w:
+                    labels[h] = f"{w}p"
+                elif h not in labels:
+                    labels[h] = f"{h}p"
+        return labels
+
+    @classmethod
     def check_english_subtitles(cls, info: Dict[str, Any]) -> Tuple[bool, Optional[str], bool]:
         """
         Returns (has_english, track_key, is_auto_generated).
