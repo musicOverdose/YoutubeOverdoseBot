@@ -251,7 +251,7 @@ The Telegram integration is engineered around strict operational consistency and
 
 1. Open Portainer and navigate to **Stacks** -> **Add stack**.
 2. Select **Repository** and enter:
-   - **Repository URL**: `https://github.com/musicOverdose/youtubedl.git`
+   - **Repository URL**: `https://github.com/musicOverdose/YoutubeOverdoseBot.git`
    - **Repository reference**: `refs/heads/main`
    - **Compose path**: `docker-compose.yml`
 3. In the **Environment variables** section, define:
@@ -275,8 +275,8 @@ The Telegram integration is engineered around strict operational consistency and
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/musicOverdose/youtubedl.git
-cd youtubedl
+git clone https://github.com/musicOverdose/YoutubeOverdoseBot.git
+cd YoutubeOverdoseBot
 
 # 2. Ensure external telegram-bots network exists
 docker network create telegram-bots || true
