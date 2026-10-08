@@ -1,13 +1,16 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.bot.bot_instance import get_bot
 from src.core.database import get_db
+from src.core.redis import get_redis_client
+from src.core.logger import get_logger
 from src.models.cache import CacheEntry
 from src.services.audit_service import AuditService
 from src.web.auth import get_current_admin
 
+logger = get_logger("cache_routes")
 router = APIRouter(prefix="/api/cache", tags=["Cache"])
 
 
@@ -104,3 +107,38 @@ async def delete_cache_record(
     await session.commit()
     await AuditService.log_action(session, "CACHE_DELETE", admin["sub"], f"Deleted cache entry {entry.id}")
     return {"status": "deleted"}
+
+
+@router.post("/clear")
+async def clear_all_cache(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    result = await session.execute(delete(CacheEntry))
+    deleted_count = result.rowcount or 0
+    await session.commit()
+
+    redis_deleted = 0
+    try:
+        r = get_redis_client()
+        meta_keys = [k async for k in r.scan_iter("ytdl:metadata:*")]
+        sub_keys = [k async for k in r.scan_iter("ytdlp:subtitles:*")]
+        all_keys = meta_keys + sub_keys
+        if all_keys:
+            redis_deleted = await r.delete(*all_keys)
+    except Exception as e:
+        logger.warning("Error clearing Redis cache keys: %s", e)
+
+    await AuditService.log_action(
+        session,
+        "CACHE_CLEAR_ALL",
+        admin["sub"],
+        f"Cleared all cache ({deleted_count} DB entries, {redis_deleted} Redis keys)",
+    )
+
+    return {
+        "status": "success",
+        "deleted_db_entries": deleted_count,
+        "deleted_redis_keys": redis_deleted,
+        "message": f"Successfully deleted {deleted_count} cache entries and flushed Redis cache.",
+    }

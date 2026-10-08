@@ -320,6 +320,26 @@ async function deleteCache(id) {
   }
 }
 
+async function clearAllCache() {
+  const confirmed = await showConfirm(
+    'Are you sure you want to delete ALL cache entries from the database and purge Redis metadata/subtitles cache? Future downloads will re-fetch media from source.',
+    'Delete All Cache',
+    'Delete All Cache',
+    'btn-danger'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await API.post('/api/cache/clear', {});
+    const count = res.deleted_db_entries ?? 0;
+    toastSuccess(res.message || `Deleted ${count} cache entries and flushed Redis cache`, 'Cache Purged');
+    loadCache();
+    if (typeof loadStats === 'function') loadStats();
+  } catch (err) {
+    toastError(err.message || 'Failed to clear cache', 'Error');
+  }
+}
+
 // 5. USERS
 let currentUsersTab = 'all';
 const cachedWhitelistSet = new Set();

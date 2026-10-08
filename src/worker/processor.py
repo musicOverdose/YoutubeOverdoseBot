@@ -434,8 +434,8 @@ class JobProcessor:
                         except Exception as meta_e:
                             logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
 
-                    # 3. Generate high-fidelity JPEG thumbnail (native frame for vertical shorts, official artwork for landscape)
-                    thumb_desc = "Extracting native vertical frame..." if is_vertical else "Processing official creator artwork..."
+                    # 3. Generate high-fidelity JPEG thumbnail (official artwork cropped to 9:16 for shorts, or landscape)
+                    thumb_desc = "Processing official vertical cover..." if is_vertical else "Processing official creator artwork..."
                     await notifier.update("🖼️", "Preparing thumbnail...", thumb_desc, force=True)
                     thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                     thumb_ok = False

@@ -250,20 +250,45 @@ class YtDlpService:
     def get_available_resolutions(cls, info: Dict[str, Any]) -> List[int]:
         """
         Inspect yt-dlp format metadata and extract actual unique available video heights.
-        Sorts descending: e.g. [2160, 1440, 1080, 720, 480, 360, 240, 144].
+        Excludes storyboards, audio-only, and formats without valid dimensions.
+        Filters out resolutions that lack supported codecs (H264/H265) if supported codecs
+        exist for other resolutions in the video, preventing 'format unavailable' errors.
         """
         formats = info.get("formats", [])
-        heights = set()
 
+        # 1. Check if any format in this video has H264 or H265
+        has_any_h264_or_h265 = False
         for f in formats:
-            # Must have a video stream
+            if f.get("format_note") == "storyboard" or str(f.get("format_id", "")).startswith("sb") or f.get("protocol") == "mhtml":
+                continue
+            vcodec = str(f.get("vcodec") or "").lower()
+            if not vcodec or vcodec == "none":
+                continue
+            if vcodec.startswith(("avc1", "h264", "hev1", "hvc1", "hevc", "h265")):
+                has_any_h264_or_h265 = True
+                break
+
+        heights = set()
+        for f in formats:
+            # Skip storyboard formats
+            if f.get("format_note") == "storyboard" or str(f.get("format_id", "")).startswith("sb") or f.get("protocol") == "mhtml":
+                continue
+
             vcodec = f.get("vcodec")
             if not vcodec or vcodec == "none":
                 continue
 
             height = f.get("height")
-            if height and isinstance(height, int) and height > 0:
-                heights.add(height)
+            if not height or not isinstance(height, int) or height <= 0:
+                continue
+
+            # If the video has H264/H265 formats, only include resolutions that actually have H264 or H265
+            if has_any_h264_or_h265:
+                vcodec_lower = str(vcodec).lower()
+                if not vcodec_lower.startswith(("avc1", "h264", "hev1", "hvc1", "hevc", "h265")):
+                    continue
+
+            heights.add(height)
 
         sorted_heights = sorted(list(heights), reverse=True)
         return sorted_heights
@@ -611,16 +636,19 @@ class YtDlpService:
     @classmethod
     def build_video_format_spec(cls, target_height: int, target_codec: Optional[str] = None) -> str:
         """
-        STRICT EXACT QUALITY & CODEC:
-        Ensures height == target_height AND video codec matches target_codec.
-        - H264: vcodec~='(?i)^(avc1|h264)'
-        - H265: vcodec~='(?i)^(hev1|hvc1|hevc|h265)'
-        Prefers compatible AAC audio (ext=m4a) for zero-conversion muxing,
-        falling back to best audio.
-        NEVER falls back to a different video codec or resolution!
+        Builds yt-dlp format selector.
+        Prioritizes exact target_height and target_codec with compatible AAC audio (ext=m4a).
+        Includes robust fallbacks so that if a specific stream is unavailable,
+        it smoothly downloads the best stream at that target height or below without failing.
         """
         if not target_codec:
-            return f"bestvideo[height={target_height}]+bestaudio/best[height={target_height}]"
+            return (
+                f"bestvideo[height={target_height}]+bestaudio[ext=m4a]/"
+                f"bestvideo[height={target_height}]+bestaudio/"
+                f"best[height={target_height}]/"
+                f"bestvideo[height<={target_height}]+bestaudio/"
+                f"best[height<={target_height}]"
+            )
 
         codec_upper = target_codec.upper()
         if codec_upper == "H264":
@@ -633,7 +661,12 @@ class YtDlpService:
         return (
             f"bestvideo[height={target_height}][{vfilter}]+bestaudio[ext=m4a]/"
             f"bestvideo[height={target_height}][{vfilter}]+bestaudio/"
-            f"best[height={target_height}][{vfilter}]"
+            f"best[height={target_height}][{vfilter}]/"
+            f"bestvideo[height={target_height}]+bestaudio[ext=m4a]/"
+            f"bestvideo[height={target_height}]+bestaudio/"
+            f"best[height={target_height}]/"
+            f"bestvideo[height<={target_height}]+bestaudio/"
+            f"best[height<={target_height}]"
         )
 
     @classmethod

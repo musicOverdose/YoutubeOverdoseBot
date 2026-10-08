@@ -1,5 +1,6 @@
 import asyncio
 import glob
+import math
 import os
 import shutil
 import tempfile
@@ -159,6 +160,7 @@ class ThumbnailService:
         """
         If an image is horizontal (w > h) but represents vertical content (e.g. YouTube Shorts 16:9 thumbnail
         with black side pillarboxes), crops the horizontal margins to match the vertical aspect ratio.
+        Uses safe inward insets to guarantee zero black border/pillarbox lines on left or right edges.
         """
         w, h = img.size
         current_ratio = w / float(h)
@@ -170,9 +172,19 @@ class ThumbnailService:
         if target_w >= w:
             return img
 
-        # Center crop horizontally
-        left = max(0, (w - target_w) // 2)
-        right = left + target_w
+        # Center crop horizontally with safe inward inset (+2px)
+        center_x = w / 2.0
+        raw_left = center_x - (target_w / 2.0)
+        raw_right = center_x + (target_w / 2.0)
+
+        safe_inset = 2
+        left = max(0, int(math.ceil(raw_left)) + safe_inset)
+        right = min(w, int(math.floor(raw_right)) - safe_inset)
+
+        if right <= left:
+            left = max(0, int(math.ceil(raw_left)))
+            right = min(w, int(math.floor(raw_right)))
+
         return img.crop((left, 0, right, h))
 
     @classmethod
@@ -371,20 +383,10 @@ class ThumbnailService:
     ) -> bool:
         """
         Orchestrates thumbnail preparation:
-        For vertical videos (Shorts):
-          Extracts native vertical video frame directly via FFmpeg (guaranteeing exact
-          vertical geometry with zero black bars / letterboxing), falling back to cropped official artwork.
-        For normal landscape videos:
-          Prioritizes official YouTube artwork, falling back to FFmpeg frame extraction.
+        1. Prioritizes official creator artwork (local downloaded thumbnail file or remote candidate URLs).
+           For vertical videos, automatically crops horizontal pillarboxes to 9:16 with zero black lines.
+        2. Falls back to high-resolution FFmpeg frame extraction only if official thumbnail is unavailable.
         """
-        # For vertical videos, native frame extraction guarantees pure 9:16 vertical thumbnail with no black bars
-        if is_vertical and os.path.exists(video_path):
-            logger.info("Vertical video detected. Extracting native vertical video frame via FFmpeg...")
-            ok = await cls.extract_frame_fallback(video_path, output_thumb_path, duration)
-            if ok:
-                return True
-            logger.warning("FFmpeg frame extraction for vertical video failed, falling back to official artwork")
-
         # Priority 1: Check existing local official thumbnail file
         if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
             logger.info("Preparing thumbnail using local official YouTube artwork: %s", source_thumb_path)
