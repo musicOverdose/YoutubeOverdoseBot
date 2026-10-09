@@ -235,13 +235,30 @@ function clearAllAlerts() {
   });
 }
 
+function setButtonLoading(btn, isLoading, loadingText = 'Saving…', defaultText = 'Save') {
+  if (!btn) return;
+  if (isLoading) {
+    if (!btn.dataset.originalHtml) {
+      btn.dataset.originalHtml = btn.innerHTML;
+    }
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span>${loadingText}</span>`;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.originalHtml) {
+      btn.innerHTML = btn.dataset.originalHtml;
+    }
+  }
+}
+
 function setupInputAlertClearers() {
   const mappings = [
     { containerId: 'sec-telegram', alertId: 'telegram-alert' },
-    { containerId: 'tg-welcome-msg-area', alertId: 'tg-welcome-alert' },
+    { containerId: 'sec-bot-messages', alertId: 'bot-welcome-alert' },
+    { containerId: 'sec-bot-messages', alertId: 'bot-help-alert' },
+    { containerId: 'sec-bot-messages', alertId: 'bot-mj-alert' },
     { containerId: 'sec-ai', alertId: 'ai-alert' },
     { containerId: 'sec-settings', alertId: 'settings-alert' },
-    { containerId: 'sec-youtube', alertId: 'youtube-alert' },
     { containerId: 'sec-cookies', alertId: 'cookies-alert' },
     { containerId: 'sec-must-join', alertId: 'must-join-alert' },
     { containerId: 'sec-must-join', alertId: 'mj-exempt-alert' },

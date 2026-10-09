@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Youtube Overdose — Admin Dashboard</title>
-  <link rel="stylesheet" href="/static/css/styles.css?v=2.0.0">
+  <link rel="stylesheet" href="/static/css/styles.css?v=2.1.0">
 </head>
 <body>
 
@@ -100,9 +100,9 @@
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           Telegram API
         </button>
-        <button class="nav-item" data-section="youtube">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42C1 8.14 1 11.71 1 11.71s0 3.57.46 5.29a2.78 2.78 0 0 0 1.95 1.96C5.12 19.42 12 19.42 12 19.42s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.96-1.96C23 15.28 23 11.71 23 11.71s0-3.57-.46-5.29z"/><polygon points="9.75 15.02 15.5 11.71 9.75 8.4 9.75 15.02"/></svg>
-          YouTube & Limits
+        <button class="nav-item" data-section="settings">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.87 15.28M4.93 4.93A10 10 0 0 0 3.06 20.21"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          Engine &amp; Limits
         </button>
         <button class="nav-item" data-section="cookies">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01"/><path d="M16 15.5v.01"/><path d="M12 12v.01"/><path d="M11 17v.01"/><path d="M7 14v.01"/></svg>
@@ -111,10 +111,6 @@
         <button class="nav-item" data-section="ai">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           AI Translation
-        </button>
-        <button class="nav-item" data-section="settings">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.87 15.28M4.93 4.93A10 10 0 0 0 3.06 20.21"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          Global Settings
         </button>
       </div>
 
@@ -585,28 +581,6 @@
             </table>
           </div>
         </div>
-
-        <!-- Custom must-join message -->
-        <div class="card max-w-md">
-          <div class="card__header">
-            <div class="card__title">Customizable Must-Join Template</div>
-          </div>
-          <div class="alert-strip hidden mb-3" id="must-join-alert" role="alert"></div>
-          <p class="font-sm text-secondary mb-3">
-            Dynamic placeholders: <code>{first_name}</code> for subscriber's name, <code>{channel_list}</code> for list of missing channels.
-          </p>
-          <div class="form-group">
-            <label for="mj-custom-msg-area">Message Template:</label>
-            <textarea id="mj-custom-msg-area" placeholder="Enter must-join message template…" rows="5"></textarea>
-          </div>
-          <div class="flex gap-2">
-            <button class="btn btn-primary" onclick="saveMustJoinMessage()">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-              Save Message
-            </button>
-            <button class="btn btn-secondary" onclick="resetMustJoinMessage()">Reset to Default</button>
-          </div>
-        </div>
       </section>
 
       <!-- ================================================
@@ -638,11 +612,11 @@
               <textarea id="bot-welcome-msg-area" rows="9" placeholder="Enter /start welcome template..."></textarea>
             </div>
             <div class="flex gap-2">
-              <button class="btn btn-primary btn-sm" id="btn-save-welcome-bot" onclick="saveWelcomeMessage()">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-welcome" onclick="saveWelcomeMessage()">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 Save Welcome
               </button>
-              <button class="btn btn-secondary btn-sm" onclick="resetWelcomeMessage()">Reset</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-welcome" onclick="resetWelcomeMessage()">Reset</button>
             </div>
           </div>
 
@@ -654,7 +628,7 @@
                 <div class="card__title">Help Message</div>
               </div>
             </div>
-            <div class="alert-strip hidden mb-3" id="tg-help-alert" role="alert"></div>
+            <div class="alert-strip hidden mb-3" id="bot-help-alert" role="alert"></div>
             <p class="font-xs text-secondary mb-3">
               Sent when a user invokes /help command. Clear usage instructions and hints.
             </p>
@@ -663,11 +637,11 @@
               <textarea id="bot-help-msg-area" rows="9" placeholder="Enter /help instructions template..."></textarea>
             </div>
             <div class="flex gap-2">
-              <button class="btn btn-primary btn-sm" id="btn-save-help" onclick="saveHelpMessage()">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-help" onclick="saveHelpMessage()">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 Save Help
               </button>
-              <button class="btn btn-secondary btn-sm" id="btn-reset-help" onclick="resetHelpMessage()">Reset</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-help" onclick="resetHelpMessage()">Reset</button>
             </div>
           </div>
 
@@ -688,11 +662,11 @@
               <textarea id="bot-mj-msg-area" rows="9" placeholder="Enter must-join prompt template..."></textarea>
             </div>
             <div class="flex gap-2">
-              <button class="btn btn-primary btn-sm" onclick="saveMustJoinMessage()">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-must-join" onclick="saveMustJoinMessage()">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 Save Gate
               </button>
-              <button class="btn btn-secondary btn-sm" onclick="resetMustJoinMessage()">Reset</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-must-join" onclick="resetMustJoinMessage()">Reset</button>
             </div>
           </div>
         </div>
@@ -861,97 +835,9 @@
           </div>
         </div>
 
-        <!-- Welcome message (full-width) -->
-        <div class="card mt-4">
-          <div class="card__header">
-            <div>
-              <div class="card__title">Telegram /start Welcome Message</div>
-              <div class="card__sub">HTML template sent when users invoke /start. Supports Telegram HTML parse mode.</div>
-            </div>
-          </div>
-
-          <div class="alert-strip hidden mb-4" id="tg-welcome-alert" role="alert"></div>
-
-          <p class="font-sm text-secondary mb-3">
-            Supported tags: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;s&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;pre&gt;</code>, <code>&lt;a href="…"&gt;</code>, <code>&lt;blockquote&gt;</code>, <code>&lt;span class="tg-spoiler"&gt;</code>.
-            Use <code>{first_name}</code> to interpolate the user's display name.
-          </p>
-
-          <div class="form-group">
-            <label for="tg-welcome-msg-area">Message Template (Telegram HTML):</label>
-            <textarea id="tg-welcome-msg-area" placeholder="Enter welcome message HTML template…" rows="7"></textarea>
-          </div>
-
-          <div class="flex gap-2">
-            <button class="btn btn-primary" id="btn-save-welcome" onclick="saveWelcomeMessage()">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-              Save Welcome Message
-            </button>
-            <button class="btn btn-secondary" id="btn-reset-welcome" onclick="resetWelcomeMessage()">Reset to Default</button>
-          </div>
-        </div>
       </section>
 
-      <!-- ================================================
-           8. YOUTUBE SETTINGS
-           ================================================ -->
-      <section id="sec-youtube" class="section" aria-label="YouTube settings">
-        <div class="section-header">
-          <div class="section-header__left">
-            <div class="section-title">YouTube Settings</div>
-            <div class="section-sub">Download quality, codec options and playlist control</div>
-          </div>
-        </div>
 
-        <div class="card max-w-md">
-          <div class="alert-strip hidden mb-4" id="youtube-alert" role="alert"></div>
-          <div class="form-group">
-            <label for="yt-max-height">Default Maximum Source Resolution:</label>
-            <select id="yt-max-height">
-              <option value="2160">2160p (4K)</option>
-              <option value="1440">1440p (2K)</option>
-              <option value="1080" selected>1080p (Full HD)</option>
-              <option value="720">720p (HD)</option>
-              <option value="480">480p</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="inline">
-              <input type="checkbox" id="yt-playlists-toggle">
-              Allow YouTube Playlists
-            </label>
-            <div class="field-hint">Disabled by default to prevent queue flood</div>
-          </div>
-          <div class="form-group">
-            <label class="inline">
-              <input type="checkbox" id="yt-h264-toggle" checked>
-              H.264 / AAC Codec Enabled
-            </label>
-          </div>
-          <div class="form-group">
-            <label class="inline">
-              <input type="checkbox" id="yt-h265-toggle" checked>
-              H.265 / AAC Codec Enabled
-            </label>
-          </div>
-          <div class="form-group">
-            <label class="inline">
-              <input type="checkbox" id="yt-mp3-toggle" checked>
-              MP3 Audio Downloads Enabled
-            </label>
-          </div>
-          <div class="form-group">
-            <label class="inline">
-              <input type="checkbox" id="yt-subs-toggle" checked>
-              Subtitle Extraction Enabled
-            </label>
-          </div>
-          <button class="btn btn-primary" onclick="saveGlobalSettings(event)">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            Save YouTube Settings
-          </button>
-        </div>
-      </section>
 
       <!-- ================================================
            9. COOKIES
@@ -1064,47 +950,108 @@
       </section>
 
       <!-- ================================================
-           11. SETTINGS
+           ENGINE & DOWNLOAD SETTINGS
            ================================================ -->
-      <section id="sec-settings" class="section" aria-label="Global settings">
+      <section id="sec-settings" class="section" aria-label="Engine settings">
         <div class="section-header">
           <div class="section-header__left">
-            <div class="section-title">Global Application Settings</div>
-            <div class="section-sub">Queue limits, download size controls and storage quotas</div>
+            <div class="section-title">Engine &amp; Download Settings</div>
+            <div class="section-sub">Media extraction rules, file size limits, storage quotas and queue thresholds</div>
           </div>
         </div>
 
-        <div class="card max-w-md">
-          <div class="alert-strip hidden mb-4" id="settings-alert" role="alert"></div>
-          <form onsubmit="saveGlobalSettings(event)">
-            <div class="form-group">
-              <label for="set-max-size-local">Maximum Video File Size Limit (Local Bot API) (MB):</label>
-              <input type="number" id="set-max-size-local" value="1900" min="10" max="2000">
-              <div class="field-hint">Maximum allowed video download size in MB for Local Telegram Bot API (default: 1900 MB, max: 2000 MB)</div>
+        <div class="alert-strip hidden mb-4" id="settings-alert" role="alert"></div>
+
+        <form onsubmit="saveGlobalSettings(event)">
+          <div class="grid-2">
+            <!-- Card 1: Media & Quality Rules -->
+            <div class="card">
+              <div class="card__header">
+                <div class="card__title">Media &amp; Quality Rules</div>
+              </div>
+              <div class="form-group">
+                <label for="set-max-height">Maximum Allowed Video Resolution:</label>
+                <select id="set-max-height">
+                  <option value="2160">2160p (4K)</option>
+                  <option value="1440">1440p (2K)</option>
+                  <option value="1080" selected>1080p (Full HD)</option>
+                  <option value="720">720p (HD)</option>
+                  <option value="480">480p</option>
+                </select>
+                <div class="field-hint">Streams are offered from 144p up to this ceiling. The bot automatically detects and stream-copies the best available native video codec (H.264 / H.265) without re-encoding.</div>
+              </div>
+
+              <div class="form-group">
+                <label class="inline">
+                  <input type="checkbox" id="set-playlists-toggle">
+                  Allow YouTube Playlists
+                </label>
+                <div class="field-hint">Disabled by default to prevent queue flood from large playlist URLs.</div>
+              </div>
+
+              <div class="form-group">
+                <label class="inline">
+                  <input type="checkbox" id="set-mp3-toggle" checked>
+                  MP3 Audio Downloads Enabled
+                </label>
+                <div class="field-hint">High-bitrate MP3 extraction with full ID3v2 tags and square album cover art.</div>
+              </div>
+
+              <div class="form-group">
+                <label class="inline">
+                  <input type="checkbox" id="set-subs-toggle" checked>
+                  Subtitle Extraction Enabled
+                </label>
+                <div class="field-hint">Clean SRT extraction for English and Persian subtitles.</div>
+              </div>
             </div>
-            <div class="form-group">
-              <label for="set-max-size-cloud">Maximum Video File Size Limit (Cloud Bot API) (MB):</label>
-              <input type="number" id="set-max-size-cloud" value="48" min="5" max="50">
-              <div class="field-hint">Maximum allowed video download size in MB for standard Cloud Bot API (default: 48 MB, max: 50 MB)</div>
+
+            <!-- Card 2: File Size & Storage Quotas -->
+            <div class="card">
+              <div class="card__header">
+                <div class="card__title">File Sizes &amp; Resource Quotas</div>
+              </div>
+
+              <div class="form-group">
+                <label for="set-max-size-local">Max Video Size — Local Bot API (MB):</label>
+                <input type="number" id="set-max-size-local" value="1900" min="10" max="2000">
+                <div class="field-hint">Allowed video download size when using Centralized Local Bot API (default: 1900 MB, max: 2000 MB).</div>
+              </div>
+
+              <div class="form-group">
+                <label for="set-max-size-cloud">Max Video Size — Cloud Bot API (MB):</label>
+                <input type="number" id="set-max-size-cloud" value="48" min="5" max="50">
+                <div class="field-hint">Allowed video download size when using standard Telegram Cloud API (max: 50 MB).</div>
+              </div>
+
+              <div class="form-group">
+                <label for="set-max-temp">Temporary Scratch Storage Limit (GB):</label>
+                <input type="number" id="set-max-temp" value="30" min="5" max="70">
+                <div class="field-hint">Safety disk quota for the <code>/tmp/ytdl</code> scratch space.</div>
+              </div>
+
+              <hr class="card-divider">
+
+              <div class="grid-2 gap-3">
+                <div class="form-group">
+                  <label for="set-max-per-user">Max Concurrent Jobs / User:</label>
+                  <input type="number" id="set-max-per-user" value="1" min="1" max="5">
+                </div>
+                <div class="form-group">
+                  <label for="set-max-queued">Max Queued Jobs / User:</label>
+                  <input type="number" id="set-max-queued" value="5" min="1" max="20">
+                </div>
+              </div>
             </div>
-            <div class="form-group">
-              <label for="set-max-per-user">Max Concurrent Jobs Per User:</label>
-              <input type="number" id="set-max-per-user" value="1" min="1" max="5">
-            </div>
-            <div class="form-group">
-              <label for="set-max-queued">Max Queued Jobs Per User:</label>
-              <input type="number" id="set-max-queued" value="5" min="1" max="20">
-            </div>
-            <div class="form-group">
-              <label for="set-max-temp">Max Temporary Storage Limit (GB):</label>
-              <input type="number" id="set-max-temp" value="30" min="5" max="70">
-            </div>
-            <button type="submit" class="btn btn-primary mt-2">
+          </div>
+
+          <div class="mt-4">
+            <button type="submit" class="btn btn-primary" id="btn-save-settings">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-              Save Global Settings
+              Save Engine Settings
             </button>
-          </form>
-        </div>
+          </div>
+        </form>
       </section>
 
       <!-- ================================================
@@ -1336,8 +1283,8 @@
   </div>
 </div>
 
-<script src="/static/js/api.js?v=2.0.0"></script>
-<script src="/static/js/components.js?v=2.0.0"></script>
-<script src="/static/js/app.js?v=2.0.0"></script>
+<script src="/static/js/api.js?v=2.1.0"></script>
+<script src="/static/js/components.js?v=2.1.0"></script>
+<script src="/static/js/app.js?v=2.1.0"></script>
 </body>
 </html>

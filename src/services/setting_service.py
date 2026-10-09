@@ -138,20 +138,22 @@ DEFAULT_MUST_JOIN_MESSAGE = (
 
 DEFAULT_WELCOME_MESSAGE = (
     "👋 Hello, <b>{first_name}</b>!\n\n"
-    "Send me any YouTube video or Shorts link, and I will download it for you in high quality.\n\n"
+    "Welcome to <b>Youtube Overdose</b> — your lightning-fast YouTube & Shorts media downloader.\n\n"
     "✨ <b>Features:</b>\n"
-    "• Exact Video Resolutions (up to 4K)\n"
-    "• 🎬 H.264 & 📦 H.265 / AAC options\n"
-    "• 🎵 High-quality MP3 with ID3 cover art\n"
-    "• 💬 Subtitles in 🇬🇧 English & 🇮🇷 Persian\n"
-    "• Instant delivery for cached media"
+    "• 🎬 <b>Crisp Video:</b> 144p up to 4K with auto-optimized codec delivery\n"
+    "• 📱 <b>Shorts & Reels:</b> True vertical aspect ratio & high-res covers\n"
+    "• 🎵 <b>Studio Audio:</b> High-bitrate MP3 with full ID3 tags & cover art\n"
+    "• 💬 <b>Subtitles:</b> Dual English & Persian subtitle tracks\n"
+    "• ⚡ <b>Clean Chat:</b> Fast downloads with automatic progress cleanup\n\n"
+    "Just paste any YouTube link below to start!"
 )
 
 DEFAULT_HELP_MESSAGE = (
     "📖 <b>How to use Youtube Overdose:</b>\n\n"
-    "1. 🔗 <b>Send a Link:</b> Paste any YouTube video or Shorts link in the chat.\n"
-    "2. 🎛 <b>Choose Format:</b> Select your desired resolution, 🎵 MP3, or 💬 Subtitles.\n"
-    "3. ⚡ <b>Fast Delivery:</b> The bot downloads the highest quality source and sends it right here!\n\n"
+    "1. 🔗 <b>Send a Link:</b> Paste any YouTube video or Shorts URL in the chat.\n"
+    "2. 🎛 <b>Select Quality:</b> Choose your preferred resolution (144p–4K), 🎵 MP3 audio, or 💬 Subtitles.\n"
+    "3. ⚡ <b>Instant Delivery:</b> The bot delivers the media with original aspect ratio and cleans up progress messages.\n"
+    "4. ❌ <b>Cancel Anytime:</b> Use the Cancel button on the menu to dismiss unwanted requests.\n\n"
     "💡 <i>Tip: Send /start anytime to view the main welcome menu.</i>"
 )
 
