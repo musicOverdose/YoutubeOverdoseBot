@@ -159,9 +159,15 @@ async def on_download_thumbnail(callback: CallbackQuery, bot: Bot):
         is_vertical = True
         target_ratio = 9 / 16.0
 
-    title = (info.get("title") if info else None) or f"YouTube_{source_id}"
+    title = (info.get("title") if info else None) or source_id or "thumbnail"
     safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip() or source_id
-    filename = f"{safe_title[:60]}_thumbnail.jpg"
+    # Keep filename concise (max ~20-22 chars) to avoid awkward overflow in Telegram UI
+    short_title = safe_title[:22].strip().rstrip("-_ ")
+    if len(safe_title) > 22 and " " in short_title:
+        last_space = short_title.rfind(" ")
+        if last_space >= 8:
+            short_title = short_title[:last_space].strip().rstrip("-_ ")
+    filename = f"{short_title or source_id}_thumb.jpg"
 
     os.makedirs(settings.TEMP_DIR, exist_ok=True)
     temp_file = os.path.join(settings.TEMP_DIR, f"full_thumb_{source_id}_{uuid.uuid4().hex[:8]}.jpg")

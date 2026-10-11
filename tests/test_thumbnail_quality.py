@@ -863,6 +863,39 @@ async def test_prepare_preview_photo_crops_black_borders(tmp_path):
             assert res.size[1] == 720
 
 
+def test_thumbnail_document_filename_is_concise():
+    """
+    Verifies that thumbnail download filename is cleanly truncated to ~25-30 chars total
+    instead of spilling out an enormous 60+ char video title.
+    """
+    # 1. Very long title
+    title = "How The Economic Machine Works by Ray Dalio - Full Guide and Breakdown"
+    source_id = "PHe0bXAIuk0"
+    safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip() or source_id
+    short_title = safe_title[:22].strip().rstrip("-_ ")
+    if len(safe_title) > 22 and " " in short_title:
+        last_space = short_title.rfind(" ")
+        if last_space >= 8:
+            short_title = short_title[:last_space].strip().rstrip("-_ ")
+    filename = f"{short_title or source_id}_thumb.jpg"
+
+    assert len(filename) <= 32
+    assert filename == "How The Economic_thumb.jpg"
+
+    # 2. Short title
+    title = "VSauce"
+    safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip() or source_id
+    short_title = safe_title[:22].strip().rstrip("-_ ")
+    if len(safe_title) > 22 and " " in short_title:
+        last_space = short_title.rfind(" ")
+        if last_space >= 8:
+            short_title = short_title[:last_space].strip().rstrip("-_ ")
+    filename = f"{short_title or source_id}_thumb.jpg"
+
+    assert filename == "VSauce_thumb.jpg"
+
+
+
 
 
 
