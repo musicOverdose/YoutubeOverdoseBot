@@ -111,7 +111,7 @@ async def test_on_download_thumbnail_delivers_document(tmp_path):
     sample_img = tmp_path / "thumb.jpg"
     Image.new("RGB", (1280, 720), color=(10, 20, 30)).save(str(sample_img), "JPEG")
 
-    async def fake_download(info, source_id, output_path):
+    async def fake_download(info, source_id, output_path, **kwargs):
         import shutil
         shutil.copy2(str(sample_img), output_path)
         return (output_path, 1280, 720)
@@ -125,8 +125,7 @@ async def test_on_download_thumbnail_delivers_document(tmp_path):
         bot.send_document.assert_awaited_once()
         args, kwargs = bot.send_document.call_args
         assert kwargs["chat_id"] == 123456
-        assert "Test Zoo Video" in kwargs["caption"]
-        assert "1280x720" in kwargs["caption"]
+        assert kwargs.get("caption") is None
 
 
 def test_build_queue_status_keyboard_has_no_cancel_button():

@@ -376,13 +376,18 @@ class YtDlpService:
 
 
     @classmethod
-    def get_available_resolutions(cls, info: Dict[str, Any]) -> List[int]:
+    def get_available_resolutions(
+        cls, info: Dict[str, Any], max_height: Optional[int] = None
+    ) -> List[int]:
         """
         Inspect yt-dlp format metadata and extract actual unique available video heights.
         Excludes storyboards, audio-only, and formats without valid dimensions.
-        Filters out resolutions that lack supported codecs (H264/H265) if supported codecs
-        exist for other resolutions in the video, preventing 'format unavailable' errors.
+        For heights <= 1080: filters out resolutions lacking H264/H265 if H264/H265 exists.
+        For heights > 1080 (1440p / 2160p 4K): YouTube serves these exclusively in VP9/AV1,
+        so they are allowed when valid video streams exist.
+        Caps at max_height if specified.
         """
+        max_h = max_height if max_height is not None else getattr(settings, "DEFAULT_MAX_HEIGHT", 1080)
         formats = info.get("formats", [])
 
         # 1. Check if any format in this video has H264 or H265
@@ -419,11 +424,16 @@ class YtDlpService:
                 # Vertical video where effective resolution (width) is lower than 144p
                 continue
 
-            # If the video has H264/H265 formats, only include resolutions that actually have H264 or H265
-            if has_any_h264_or_h265:
+            # If the video has H264/H265 formats, only require H264/H265 for heights <= 1080p
+            # (since YouTube serves >1080p in VP9/AV1 only).
+            if has_any_h264_or_h265 and height <= 1080:
                 vcodec_lower = str(vcodec).lower()
                 if not vcodec_lower.startswith(("avc1", "h264", "hev1", "hvc1", "hevc", "h265")):
                     continue
+
+            # Filter against configured maximum allowed resolution ceiling
+            if height > max_h:
+                continue
 
             heights.add(height)
 
@@ -434,11 +444,8 @@ class YtDlpService:
     def get_available_codecs_for_height(cls, info: Dict[str, Any], target_height: int) -> List[str]:
         """
         Inspects yt-dlp format metadata for the exact target_height.
-        Returns a list of available codecs from ["H264", "H265"] that actually exist at that height.
-        Recognizes:
-        - H.264: avc1*, h264*
-        - H.265/HEVC: hev1*, hvc1*, hevc*, h265*
-        Formats with vcodec == 'none' or non-matching heights are ignored.
+        Returns a list of available codecs from ["H264", "H265"] for heights <= 1080p,
+        or ["H264", "H265", "VP9", "AV1"] for heights > 1080p.
         """
         formats = info.get("formats", [])
         codecs = set()
@@ -462,12 +469,21 @@ class YtDlpService:
                 or vcodec_lower.startswith("h265")
             ):
                 codecs.add("H265")
+            elif target_height > 1080:
+                if vcodec_lower.startswith("vp09") or vcodec_lower.startswith("vp9"):
+                    codecs.add("VP9")
+                elif vcodec_lower.startswith("av01") or vcodec_lower.startswith("av1"):
+                    codecs.add("AV1")
 
         res = []
         if "H264" in codecs:
             res.append("H264")
         if "H265" in codecs:
             res.append("H265")
+        if "VP9" in codecs:
+            res.append("VP9")
+        if "AV1" in codecs:
+            res.append("AV1")
         return res
 
     @classmethod
@@ -475,13 +491,18 @@ class YtDlpService:
         """
         Automatically selects the optimal available video codec for target_height.
         Prioritizes H.264 (AVC) for instant stream-copying and universal compatibility.
-        Falls back to H.265 (HEVC) if available, or default H264.
+        Falls back to H.265 (HEVC), then VP9 (native for >1080p), or default H264.
         """
         codecs = cls.get_available_codecs_for_height(info, target_height)
         if "H264" in codecs:
             return "H264"
         if "H265" in codecs:
             return "H265"
+        if target_height > 1080:
+            if "VP9" in codecs:
+                return "VP9"
+            if "AV1" in codecs:
+                return "AV1"
         return "H264"
 
     @classmethod
@@ -793,6 +814,10 @@ class YtDlpService:
             vfilter = "vcodec~='(?i)^(avc1|h264)'"
         elif codec_upper == "H265":
             vfilter = "vcodec~='(?i)^(hev1|hvc1|hevc|h265)'"
+        elif codec_upper == "VP9":
+            vfilter = "vcodec~='(?i)^(vp09|vp9)'"
+        elif codec_upper == "AV1":
+            vfilter = "vcodec~='(?i)^(av01|av1)'"
         else:
             raise ValueError(f"Unsupported target codec: {target_codec}")
 

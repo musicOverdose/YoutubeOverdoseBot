@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     SUBTITLES_ENABLED: bool = Field(default=True)
     MUST_JOIN_ENABLED: bool = Field(default=False)
     MUST_JOIN_EXEMPT_USERS: str = Field(default="")
+    MAINTENANCE_MODE: bool = Field(default=False, description="Maintenance mode lock")
+    MAINTENANCE_ADMIN_IDS: str = Field(default="", description="Telegram user IDs/usernames permitted during maintenance")
+    MAINTENANCE_MESSAGE: str = Field(
+        default="🛠 <b>Bot Under Maintenance</b>\n\nThe bot is currently undergoing scheduled maintenance and updates.\nPlease try again shortly!",
+        description="Notice message sent to non-admin users during maintenance"
+    )
 
     # AI Translation
     AI_ENABLED: bool = Field(default=False)

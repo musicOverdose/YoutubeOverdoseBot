@@ -62,7 +62,7 @@ async def on_codec_selected(callback: CallbackQuery, bot: Bot):
         await safe_callback_answer(callback, "Invalid height.", show_alert=True)
         return
 
-    if codec not in ("H264", "H265"):
+    if codec not in ("H264", "H265", "VP9", "AV1"):
         await safe_callback_answer(callback, "Unsupported video codec.", show_alert=True)
         return
 

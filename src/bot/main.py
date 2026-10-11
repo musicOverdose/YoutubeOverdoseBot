@@ -18,6 +18,7 @@ from src.bot.handlers.quality_handler import quality_router
 from src.bot.handlers.queue_handler import queue_router
 from src.bot.handlers.subtitle_handler import subtitle_router
 from src.bot.handlers.url_handler import url_router
+from src.bot.middlewares.maintenance_middleware import MaintenanceMiddleware
 from src.core.config import settings
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
@@ -29,6 +30,9 @@ logger = setup_logger("bot_main")
 
 
 def setup_handlers(dp: Dispatcher) -> None:
+    dp.message.outer_middleware(MaintenanceMiddleware())
+    dp.callback_query.outer_middleware(MaintenanceMiddleware())
+
     dp.include_router(base_router)
     dp.include_router(url_router)
     dp.include_router(quality_router)

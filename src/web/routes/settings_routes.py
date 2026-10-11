@@ -25,6 +25,9 @@ class SettingsUpdateRequest(BaseModel):
     h265_enabled: bool
     mp3_enabled: bool
     subtitles_enabled: bool
+    maintenance_mode: Optional[bool] = None
+    maintenance_admin_ids: Optional[str] = None
+    maintenance_message: Optional[str] = None
 
 
 @router.get("")

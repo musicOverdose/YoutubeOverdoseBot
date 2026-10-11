@@ -34,7 +34,14 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
         return
 
     # Usable resolutions and friendly display labels
-    available_heights = YtDlpService.get_available_resolutions(info)
+    max_height = getattr(settings, "DEFAULT_MAX_HEIGHT", 2160)
+    try:
+        app_settings = await SettingService.get_application_settings()
+        max_height = app_settings.get("default_max_height") or max_height
+    except Exception:
+        pass
+
+    available_heights = YtDlpService.get_available_resolutions(info, max_height=max_height)
     resolution_labels = YtDlpService.get_resolution_labels(info)
     title = info.get("title", "YouTube Video")
     thumbnail_url = ThumbnailService.get_best_thumbnail_url(info) or info.get("thumbnail")

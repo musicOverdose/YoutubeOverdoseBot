@@ -1070,6 +1070,35 @@
             </div>
           </div>
 
+          <!-- Card 3: Maintenance Mode & Access Control -->
+          <div class="card mt-4 mb-4">
+            <div class="card__header" style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="card__title">🛠 Maintenance Mode &amp; Access Control</div>
+              <span id="badge-maintenance-status" class="badge badge-success">🟢 Normal Operation (Public)</span>
+            </div>
+            <p class="text-muted text-sm mb-3">When enabled, regular users are blocked with the notification message below, while whitelisted admin Telegram IDs and Must-Join exempt users can use and test the bot freely.</p>
+
+            <div class="form-group">
+              <label class="inline">
+                <input type="checkbox" id="set-maint-toggle" onchange="updateMaintenanceBadge()">
+                <b>Enable Maintenance Mode (Admins Only)</b>
+              </label>
+              <div class="field-hint">Activate during updates or beta testing so regular users cannot send jobs.</div>
+            </div>
+
+            <div class="form-group">
+              <label for="set-maint-admins">Admin Telegram User IDs / Usernames:</label>
+              <input type="text" id="set-maint-admins" placeholder="e.g. 123456789, 987654321, @admin_user">
+              <div class="field-hint">Comma- or space-separated Telegram user IDs and usernames permitted to use the bot during maintenance.</div>
+            </div>
+
+            <div class="form-group">
+              <label for="set-maint-msg">Maintenance Notice Message (HTML):</label>
+              <textarea id="set-maint-msg" rows="3" placeholder="🛠 &lt;b&gt;Bot Under Maintenance&lt;/b&gt;&#10;&#10;We are currently performing updates. Please try again shortly!"></textarea>
+              <div class="field-hint">The notification sent to standard users when maintenance mode is active.</div>
+            </div>
+          </div>
+
           <div class="mt-4">
             <button type="submit" class="btn btn-primary" id="btn-save-settings">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>

@@ -68,6 +68,12 @@ class FFmpegService:
                 # hevc, h265, hev1, hvc1 can be stream-copied
                 if vcodec in ("hevc", "h265", "hev1", "hvc1"):
                     can_copy_v = True
+            elif target_codec.upper() == "VP9":
+                if vcodec in ("vp9", "vp09"):
+                    can_copy_v = True
+            elif target_codec.upper() == "AV1":
+                if vcodec in ("av1", "av01"):
+                    can_copy_v = True
 
         if a_stream:
             acodec = (a_stream.get("codec_name") or "").lower()
@@ -146,6 +152,9 @@ class FFmpegService:
                 pass
 
         vcodec = (v_stream.get("codec_name") or "h264").lower()
+        if vcodec in ("vp9", "vp09", "av1", "av01"):
+            logger.info("Skipping intro concatenation for %s stream (not supported for bitstream splicing)", vcodec)
+            return False
         encoder = "libx265" if vcodec in ("hevc", "h265", "hev1", "hvc1") else "libx264"
         pix_fmt = v_stream.get("pix_fmt") or "yuv420p"
         r_fps = v_stream.get("r_frame_rate") or "30/1"

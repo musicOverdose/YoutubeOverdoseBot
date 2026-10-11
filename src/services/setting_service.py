@@ -81,6 +81,9 @@ SETTING_YTDLP_PROXY = "ytdlp_proxy"
 SETTING_MUST_JOIN_ENABLED = "must_join_enabled"
 SETTING_MUST_JOIN_EXEMPT_USERS = "must_join_exempt_users"
 SETTING_MAX_ACTIVE_JOBS = "max_active_jobs"
+SETTING_MAINTENANCE_MODE = "maintenance_mode"
+SETTING_MAINTENANCE_ADMIN_IDS = "maintenance_admin_ids"
+SETTING_MAINTENANCE_MESSAGE = "maintenance_message"
 
 APP_SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
     SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL: {"attr": "MAX_VIDEO_FILE_SIZE_MB_LOCAL", "type": int, "encrypted": False, "desc": "Max video file size (MB) for Local Bot API"},
@@ -109,6 +112,9 @@ APP_SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
     SETTING_MUST_JOIN_ENABLED: {"attr": "MUST_JOIN_ENABLED", "type": bool, "encrypted": False, "desc": "Must-join channels enforcement enabled"},
     SETTING_MUST_JOIN_EXEMPT_USERS: {"attr": "MUST_JOIN_EXEMPT_USERS", "type": str, "encrypted": False, "desc": "Must-join exempt user IDs and usernames"},
     SETTING_MAX_ACTIVE_JOBS: {"attr": "MAX_ACTIVE_JOBS", "type": int, "encrypted": False, "desc": "Max active worker processing jobs"},
+    SETTING_MAINTENANCE_MODE: {"attr": "MAINTENANCE_MODE", "type": bool, "encrypted": False, "desc": "Maintenance mode lock"},
+    SETTING_MAINTENANCE_ADMIN_IDS: {"attr": "MAINTENANCE_ADMIN_IDS", "type": str, "encrypted": False, "desc": "Allowed admin Telegram IDs during maintenance"},
+    SETTING_MAINTENANCE_MESSAGE: {"attr": "MAINTENANCE_MESSAGE", "type": str, "encrypted": False, "desc": "Maintenance notice message"},
 }
 
 
@@ -1308,6 +1314,76 @@ class SettingService:
         return clean_val
 
     @classmethod
+    async def is_maintenance_mode(cls, session: Optional[AsyncSession] = None) -> bool:
+        """Checks if bot is currently in maintenance mode, using fast Redis/DB cache."""
+        try:
+            r = get_redis_client()
+            cached = await r.get("setting:maintenance_mode")
+            if cached is not None:
+                val = cached.decode() if isinstance(cached, bytes) else str(cached)
+                return val.lower() in ("true", "1", "yes", "t")
+        except Exception:
+            pass
+
+        val = await cls.get_active_setting(SETTING_MAINTENANCE_MODE, session=session)
+        if val is not None:
+            is_m = str(val).lower() in ("true", "1", "yes", "t")
+            try:
+                r = get_redis_client()
+                await r.set("setting:maintenance_mode", "true" if is_m else "false", ex=300)
+            except Exception:
+                pass
+            return is_m
+        return getattr(settings, "MAINTENANCE_MODE", False)
+
+    @classmethod
+    async def get_maintenance_admin_ids(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get comma/space-separated Telegram user IDs/usernames permitted during maintenance."""
+        val = await cls.get_active_setting(SETTING_MAINTENANCE_ADMIN_IDS, session=session)
+        if val:
+            return str(val)
+        return getattr(settings, "MAINTENANCE_ADMIN_IDS", "")
+
+    @classmethod
+    async def get_maintenance_message(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get the notification message displayed to regular users during maintenance."""
+        val = await cls.get_active_setting(SETTING_MAINTENANCE_MESSAGE, session=session)
+        if val:
+            return str(val)
+        return getattr(
+            settings,
+            "MAINTENANCE_MESSAGE",
+            "🛠 <b>Bot Under Maintenance</b>\n\nThe bot is currently undergoing scheduled maintenance and updates.\nPlease try again shortly!",
+        )
+
+    @classmethod
+    async def is_user_maintenance_admin(
+        cls,
+        user_id: int,
+        username: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> bool:
+        """
+        Checks whether a user is recognized as an admin for maintenance bypass.
+        Checks both MAINTENANCE_ADMIN_IDS and MUST_JOIN_EXEMPT_USERS.
+        """
+        from src.services.must_join_service import MustJoinService
+
+        # 1. Check maintenance admin IDs
+        raw_maint = await cls.get_maintenance_admin_ids(session)
+        m_ids, m_names = MustJoinService.parse_exemptions(raw_maint)
+        if user_id in m_ids:
+            return True
+        if username and username.lower().lstrip("@") in m_names:
+            return True
+
+        # 2. Check general exempt users
+        if MustJoinService.is_user_exempt(user_id, username):
+            return True
+
+        return False
+
+    @classmethod
     async def get_welcome_message(cls, session: Optional[AsyncSession] = None) -> str:
         """Get the active welcome message template for /start."""
         custom_msg = await cls.get_active_setting(SETTING_WELCOME_MSG, session)
@@ -1595,6 +1671,9 @@ class SettingService:
             # Publish reload notification to Redis if connected
             try:
                 r = get_redis_client()
+                if SETTING_MAINTENANCE_MODE in values:
+                    m_val = str(values[SETTING_MAINTENANCE_MODE]).lower() in ("true", "1", "yes", "t")
+                    await r.set("setting:maintenance_mode", "true" if m_val else "false", ex=3600)
                 await r.publish("app:config:reload", json.dumps({"type": "application_settings"}))
             except Exception as e:
                 logger.debug("Could not publish app:config:reload to Redis: %s", e)

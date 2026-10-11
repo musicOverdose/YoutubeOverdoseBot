@@ -863,6 +863,9 @@ async function loadSettings() {
   const elPerUser = document.getElementById('set-max-per-user');
   const elQueued = document.getElementById('set-max-queued');
   const elTemp = document.getElementById('set-max-temp');
+  const elMaint = document.getElementById('set-maint-toggle');
+  const elMaintAdmins = document.getElementById('set-maint-admins');
+  const elMaintMsg = document.getElementById('set-maint-msg');
 
   if (elHeight) elHeight.value = data.default_max_height ?? 1080;
   if (elPlaylists) elPlaylists.checked = data.playlists_enabled ?? false;
@@ -873,6 +876,23 @@ async function loadSettings() {
   if (elPerUser) elPerUser.value = data.max_concurrent_per_user ?? 1;
   if (elQueued) elQueued.value = data.max_queued_per_user ?? 5;
   if (elTemp) elTemp.value = data.max_temp_storage_gb ?? 30;
+  if (elMaint) elMaint.checked = data.maintenance_mode ?? false;
+  if (elMaintAdmins) elMaintAdmins.value = data.maintenance_admin_ids || '';
+  if (elMaintMsg) elMaintMsg.value = data.maintenance_message || '';
+  updateMaintenanceBadge();
+}
+
+function updateMaintenanceBadge() {
+  const badge = document.getElementById('badge-maintenance-status');
+  const toggle = document.getElementById('set-maint-toggle');
+  if (!badge) return;
+  if (toggle && toggle.checked) {
+    badge.className = 'badge badge-warning';
+    badge.textContent = '🟡 Maintenance Active (Admins Only)';
+  } else {
+    badge.className = 'badge badge-success';
+    badge.textContent = '🟢 Normal Operation (Public)';
+  }
 }
 
 async function saveGlobalSettings(e) {
@@ -893,6 +913,9 @@ async function saveGlobalSettings(e) {
     max_concurrent_per_user: parseInt(document.getElementById('set-max-per-user')?.value || '1', 10),
     max_queued_per_user: parseInt(document.getElementById('set-max-queued')?.value || '5', 10),
     max_temp_storage_gb: parseInt(document.getElementById('set-max-temp')?.value || '30', 10),
+    maintenance_mode: document.getElementById('set-maint-toggle')?.checked || false,
+    maintenance_admin_ids: document.getElementById('set-maint-admins')?.value?.trim() || '',
+    maintenance_message: document.getElementById('set-maint-msg')?.value?.trim() || '',
   };
 
   try {
