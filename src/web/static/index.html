@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Youtube Overdose — Admin Dashboard</title>
-  <link rel="stylesheet" href="/static/css/styles.css?v=2.1.0">
+  <link rel="stylesheet" href="/static/css/styles.css?v=2.2.0">
 </head>
 <body>
 
@@ -594,7 +594,7 @@
           </div>
         </div>
 
-        <div class="grid grid-3 gap-4 mb-4">
+        <div class="grid grid-2 gap-4 mb-4">
           <!-- 1. Welcome Message Card -->
           <div class="card">
             <div class="card__header">
@@ -667,6 +667,31 @@
                 Save Gate
               </button>
               <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-must-join" onclick="resetMustJoinMessage()">Reset</button>
+            </div>
+          </div>
+
+          <!-- 4. Unsupported Link Error Card -->
+          <div class="card">
+            <div class="card__header">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-danger">Link Error</span>
+                <div class="card__title">Unsupported Link Message</div>
+              </div>
+            </div>
+            <div class="alert-strip hidden mb-3" id="bot-unsupported-link-alert" role="alert"></div>
+            <p class="font-xs text-secondary mb-3">
+              Sent when a user sends an unsupported non-YouTube URL (plain text messages without links are ignored).
+            </p>
+            <div class="form-group">
+              <label for="bot-unsupported-link-msg-area">Template (HTML):</label>
+              <textarea id="bot-unsupported-link-msg-area" rows="9" placeholder="Enter unsupported link error template..."></textarea>
+            </div>
+            <div class="flex gap-2">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-unsupported-link" onclick="saveUnsupportedLinkMessage()">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Message
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-unsupported-link" onclick="resetUnsupportedLinkMessage()">Reset</button>
             </div>
           </div>
         </div>
@@ -1203,20 +1228,21 @@
       <div class="alert-strip alert-strip--danger hidden mb-3" id="add-channel-alert" role="alert"></div>
       <form onsubmit="addChannelModalSubmit(event)" id="form-add-channel">
         <div class="form-group">
-          <label for="mj-title">Channel Title:</label>
-          <input type="text" id="mj-title" placeholder="My Channel" required>
+          <label for="mj-chat-id">Channel Identifier (Chat ID or @username):</label>
+          <input type="text" id="mj-chat-id" placeholder="-1001234567890 or @mychannel" required>
+          <div class="field-hint">Simply enter the numeric Chat ID or public @username. The channel title, handle, and invite link are fetched automatically from Telegram!</div>
         </div>
         <div class="form-group">
-          <label for="mj-chat-id">Channel Numeric Chat ID:</label>
-          <input type="number" id="mj-chat-id" placeholder="-1001234567890" required>
+          <label for="mj-title">Channel Title (Optional override):</label>
+          <input type="text" id="mj-title" placeholder="Auto-detected from Telegram (or enter custom title)">
         </div>
         <div class="form-group">
-          <label for="mj-username">Public Username (without @, optional):</label>
-          <input type="text" id="mj-username" placeholder="mychannel">
+          <label for="mj-username">Public Username (Optional override, without @):</label>
+          <input type="text" id="mj-username" placeholder="Auto-detected (or enter custom handle)">
         </div>
         <div class="form-group">
-          <label for="mj-invite">Invite Link (required for private channels):</label>
-          <input type="text" id="mj-invite" placeholder="https://t.me/+AbCdEfGhIj">
+          <label for="mj-invite">Invite Link (Optional override):</label>
+          <input type="text" id="mj-invite" placeholder="Auto-detected (or enter custom invite link)">
         </div>
       </form>
     </div>
@@ -1283,8 +1309,8 @@
   </div>
 </div>
 
-<script src="/static/js/api.js?v=2.1.0"></script>
-<script src="/static/js/components.js?v=2.1.0"></script>
-<script src="/static/js/app.js?v=2.1.0"></script>
+<script src="/static/js/api.js?v=2.2.0"></script>
+<script src="/static/js/components.js?v=2.2.0"></script>
+<script src="/static/js/app.js?v=2.2.0"></script>
 </body>
 </html>

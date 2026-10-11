@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+import urllib.parse
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import yt_dlp
 from yt_dlp.cookies import YoutubeDLCookieJar
@@ -125,17 +126,145 @@ async def set_subtitle_cooldown(cooldown_seconds: int = 30) -> None:
     _in_memory_subtitle_cooldown_until = max(_in_memory_subtitle_cooldown_until, now + cooldown_seconds)
 
 
-# Standard YouTube URL regex patterns
-YOUTUBE_URL_REGEX = re.compile(
-    r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch\?v=|shorts/|embed/)|youtu\.be/)([\w-]{11})([^\s]*)?$",
+YOUTUBE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{11}$")
+GENERIC_URL_PATTERN = re.compile(
+    r"(https?://[^\s<>\"\'\)]+|www\.[^\s<>\"\'\)]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s<>\"\'\)]*)?)",
     re.IGNORECASE,
 )
 
 
-def extract_youtube_id(url: str) -> Optional[str]:
-    match = YOUTUBE_URL_REGEX.match(url.strip())
-    if match:
-        return match.group(5)
+def contains_url(text: Optional[str], entities: Optional[list] = None) -> bool:
+    """Checks whether a message or text contains a URL (ignoring plain text)."""
+    if entities:
+        for ent in entities:
+            ent_type = getattr(ent, "type", None) or (ent.get("type") if isinstance(ent, dict) else None)
+            if ent_type in ("url", "text_link"):
+                return True
+    if not text:
+        return False
+    return bool(GENERIC_URL_PATTERN.search(text.strip()))
+
+
+def _extract_id_from_url_obj(parsed: urllib.parse.ParseResult) -> Optional[str]:
+    """Inspects a parsed URL object and resolves YouTube video ID, handling search redirects."""
+    host = (parsed.netloc or "").lower()
+
+    # 1. Google Search or Redirect wrappers (google.*/url?url=... or ?q=...)
+    if "google." in host and (parsed.path.endswith("/url") or "/search" in parsed.path):
+        qs = urllib.parse.parse_qs(parsed.query)
+        for key in ("url", "q", "target", "u"):
+            if key in qs and qs[key]:
+                sub_url = qs[key][0]
+                try:
+                    sub_parsed = urllib.parse.urlparse(sub_url)
+                    sub_id = _extract_id_from_url_obj(sub_parsed)
+                    if sub_id:
+                        return sub_id
+                except Exception:
+                    pass
+
+    # 2. Generic redirect wrappers where query param contains a full URL
+    if parsed.query:
+        qs = urllib.parse.parse_qs(parsed.query)
+        for key in ("url", "u", "target", "destination", "link"):
+            if key in qs and qs[key]:
+                sub_url = qs[key][0]
+                if "youtube" in sub_url or "youtu.be" in sub_url:
+                    try:
+                        sub_parsed = urllib.parse.urlparse(sub_url)
+                        sub_id = _extract_id_from_url_obj(sub_parsed)
+                        if sub_id:
+                            return sub_id
+                    except Exception:
+                        pass
+
+    # 3. Standard YouTube domains (youtube.com, m.youtube.com, music.youtube.com, etc.)
+    yt_hosts = (
+        "youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "gaming.youtube.com",
+        "www.youtube.com",
+        "youtube-nocookie.com",
+    )
+    if host in yt_hosts or any(host.endswith("." + yh) for yh in ("youtube.com", "youtube-nocookie.com")):
+        # Watch format: /watch?v=... or /watch?vi=...
+        if parsed.path.startswith("/watch"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            v = qs.get("v") or qs.get("vi")
+            if v and YOUTUBE_ID_PATTERN.match(v[0]):
+                return v[0]
+
+        # Path formats: /shorts/ID, /live/ID, /embed/ID, /v/ID, /e/ID
+        for prefix in ("/shorts/", "/live/", "/embed/", "/v/", "/e/"):
+            if parsed.path.startswith(prefix):
+                candidate = parsed.path[len(prefix):].split("/")[0].split("?")[0]
+                if YOUTUBE_ID_PATTERN.match(candidate):
+                    return candidate
+
+        # Attribution link: /attribution_link?u=/watch%3Fv%3DID
+        if parsed.path.startswith("/attribution_link"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            if "u" in qs and qs["u"]:
+                sub_url = urllib.parse.unquote(qs["u"][0])
+                if not sub_url.startswith("http"):
+                    sub_url = "https://www.youtube.com" + sub_url
+                try:
+                    sub_parsed = urllib.parse.urlparse(sub_url)
+                    return _extract_id_from_url_obj(sub_parsed)
+                except Exception:
+                    pass
+
+    # 4. Short domain: youtu.be/ID
+    if host == "youtu.be" or host.endswith(".youtu.be"):
+        candidate = parsed.path.lstrip("/").split("/")[0].split("?")[0]
+        if YOUTUBE_ID_PATTERN.match(candidate):
+            return candidate
+
+    return None
+
+
+def extract_youtube_id(text: Optional[str]) -> Optional[str]:
+    """
+    Extracts an 11-character YouTube video ID from any input text or URL,
+    including:
+    - Direct YouTube URLs (watch, shorts, live, embed, youtu.be, etc.)
+    - Alternative subdomains (m.youtube.com, music.youtube.com)
+    - Google search redirect links (google.com/url?url=... or ?q=...)
+    - Redirect parameters in other wrappers
+    - Messy query strings (e.g. &vl=en, ?feature=share&v=...)
+    - Raw text containing YouTube links (e.g. from YouTube mobile app share sheet)
+    """
+    if not text:
+        return None
+
+    clean_text = text.strip()
+
+    # 1. Match any embedded URLs in the text
+    url_matches = GENERIC_URL_PATTERN.findall(clean_text)
+    candidates = url_matches if url_matches else [clean_text]
+
+    for raw_url in candidates:
+        url_to_parse = raw_url
+        if not url_to_parse.startswith(("http://", "https://")):
+            url_to_parse = "https://" + url_to_parse
+        try:
+            parsed = urllib.parse.urlparse(url_to_parse)
+            vid = _extract_id_from_url_obj(parsed)
+            if vid:
+                return vid
+        except Exception:
+            pass
+
+    # 2. Regex fallback for embedded video ID patterns in raw text
+    fallback_regex = re.compile(
+        r"(?:v=|vi=|/shorts/|/live/|/embed/|/v/|/e/|youtu\.be/)([a-zA-Z0-9_-]{11})",
+        re.IGNORECASE,
+    )
+    fb_match = fallback_regex.search(clean_text)
+    if fb_match:
+        return fb_match.group(1)
+
     return None
 
 

@@ -48,6 +48,7 @@ SETTING_CONFIG_VERSION = "telegram_config_version"
 SETTING_MUST_JOIN_MSG = "must_join_message"
 SETTING_WELCOME_MSG = "welcome_message"
 SETTING_HELP_MSG = "help_message"
+SETTING_UNSUPPORTED_LINK_MSG = "unsupported_link_message"
 
 # Application Setting Keys
 SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL = "max_video_file_size_mb_local"
@@ -155,6 +156,10 @@ DEFAULT_HELP_MESSAGE = (
     "3. ⚡ <b>Instant Delivery:</b> The bot delivers the media with original aspect ratio and cleans up progress messages.\n"
     "4. ❌ <b>Cancel Anytime:</b> Use the Cancel button on the menu to dismiss unwanted requests.\n\n"
     "💡 <i>Tip: Send /start anytime to view the main welcome menu.</i>"
+)
+
+DEFAULT_UNSUPPORTED_LINK_MESSAGE = (
+    "❌ <b>Unsupported Link:</b> Please send a valid YouTube video or Shorts link."
 )
 
 
@@ -1437,6 +1442,77 @@ class SettingService:
             )
             await sess.commit()
             return DEFAULT_HELP_MESSAGE
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            if own_session:
+                await sess.close()
+
+    @classmethod
+    async def get_unsupported_link_message(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get the active unsupported link message template."""
+        custom_msg = await cls.get_active_setting(SETTING_UNSUPPORTED_LINK_MSG, session)
+        return custom_msg if custom_msg else DEFAULT_UNSUPPORTED_LINK_MESSAGE
+
+    @classmethod
+    async def save_unsupported_link_message(
+        cls,
+        message: str,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        """Validate and save a custom unsupported link message template."""
+        clean_msg = message.strip()
+        is_valid, err = validate_telegram_html(clean_msg)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid Telegram HTML formatting: {err}",
+            )
+
+        own_session = session is None
+        sess = session or AsyncSessionLocal()
+        try:
+            stmt = select(Setting).where(Setting.key == SETTING_UNSUPPORTED_LINK_MSG, Setting.status == "ACTIVE")
+            res = await sess.execute(stmt)
+            item = res.scalar_one_or_none()
+            if item:
+                item.value = clean_msg
+            else:
+                sess.add(
+                    Setting(
+                        key=SETTING_UNSUPPORTED_LINK_MSG,
+                        status="ACTIVE",
+                        value=clean_msg,
+                        is_encrypted=False,
+                        description="Custom Telegram Bot Unsupported Link Message Template",
+                    )
+                )
+            await sess.commit()
+            return clean_msg
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            if own_session:
+                await sess.close()
+
+    @classmethod
+    async def reset_unsupported_link_message(
+        cls,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        """Reset the unsupported link message to system default."""
+        own_session = session is None
+        sess = session or AsyncSessionLocal()
+        try:
+            await sess.execute(
+                delete(Setting).where(Setting.key == SETTING_UNSUPPORTED_LINK_MSG, Setting.status == "ACTIVE")
+            )
+            await sess.commit()
+            return DEFAULT_UNSUPPORTED_LINK_MESSAGE
         except Exception:
             await sess.rollback()
             raise

@@ -257,6 +257,7 @@ function setupInputAlertClearers() {
     { containerId: 'sec-bot-messages', alertId: 'bot-welcome-alert' },
     { containerId: 'sec-bot-messages', alertId: 'bot-help-alert' },
     { containerId: 'sec-bot-messages', alertId: 'bot-mj-alert' },
+    { containerId: 'sec-bot-messages', alertId: 'bot-unsupported-link-alert' },
     { containerId: 'sec-ai', alertId: 'ai-alert' },
     { containerId: 'sec-settings', alertId: 'settings-alert' },
     { containerId: 'sec-cookies', alertId: 'cookies-alert' },

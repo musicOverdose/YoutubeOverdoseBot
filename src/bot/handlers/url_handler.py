@@ -1,6 +1,7 @@
 import os
 import uuid
 from aiogram import Bot, Router
+from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile, Message
 from src.bot.handlers.base import get_or_create_user
 from src.bot.keyboards import build_quality_keyboard
@@ -8,8 +9,9 @@ from src.core.config import settings
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.services.must_join_service import MustJoinService
+from src.services.setting_service import DEFAULT_UNSUPPORTED_LINK_MESSAGE, SettingService
 from src.services.thumbnail_service import ThumbnailService
-from src.services.ytdlp_service import YtDlpService, extract_youtube_id, get_canonical_url
+from src.services.ytdlp_service import YtDlpService, contains_url, extract_youtube_id, get_canonical_url
 
 logger = setup_logger("url_handler")
 url_router = Router()
@@ -117,3 +119,40 @@ async def handle_youtube_url(message: Message, bot: Bot):
 
     # 2. PROCEED WITH URL PROCESSING
     await process_youtube_url(bot, message.chat.id, canonical_url, source_id)
+
+
+@url_router.message(
+    lambda msg: msg.text
+    and not msg.text.startswith("/")
+    and contains_url(msg.text, msg.entities)
+    and extract_youtube_id(msg.text) is None
+)
+async def handle_unsupported_link(message: Message, bot: Bot):
+    """
+    Replies with an unsupported link error when user sends any URL that is
+    not a valid YouTube link (ignoring plain text without URLs).
+    """
+    async with AsyncSessionLocal() as session:
+        await get_or_create_user(session, message.from_user)
+
+        # Centralized Must-Join Check
+        allowed = await MustJoinService.enforce_must_join_message(
+            message=message,
+            bot=bot,
+            session=session,
+        )
+        if not allowed:
+            return
+
+        try:
+            err_text = await SettingService.get_unsupported_link_message(session)
+        except Exception as e:
+            logger.warning("Failed to load unsupported link message from DB: %s. Using default.", e)
+            err_text = DEFAULT_UNSUPPORTED_LINK_MESSAGE
+
+    try:
+        await message.reply(err_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.warning("Custom unsupported link message failed HTML parsing: %s. Falling back to default.", e)
+        await message.reply(DEFAULT_UNSUPPORTED_LINK_MESSAGE, parse_mode=ParseMode.HTML)
+

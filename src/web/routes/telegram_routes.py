@@ -42,6 +42,10 @@ class HelpMessageRequest(BaseModel):
     message: str
 
 
+class UnsupportedLinkMessageRequest(BaseModel):
+    message: str
+
+
 @router.get("/config")
 async def get_telegram_config(
     session: AsyncSession = Depends(get_db),
@@ -244,4 +248,43 @@ async def reset_help_message(
         admin_username=admin.get("sub", "admin"),
     )
     return {"message": msg, "status": "reset"}
+
+
+@router.get("/unsupported-link-message")
+async def get_unsupported_link_message(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Retrieve the current active unsupported link message template."""
+    msg = await SettingService.get_unsupported_link_message(session)
+    return {"message": msg}
+
+
+@router.post("/unsupported-link-message")
+async def save_unsupported_link_message(
+    req: UnsupportedLinkMessageRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Save a validated custom unsupported link message template."""
+    msg = await SettingService.save_unsupported_link_message(
+        message=req.message,
+        session=session,
+        admin_username=admin.get("sub", "admin"),
+    )
+    return {"message": msg, "status": "saved"}
+
+
+@router.post("/unsupported-link-message/reset")
+async def reset_unsupported_link_message(
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    """Reset the unsupported link message template to default."""
+    msg = await SettingService.reset_unsupported_link_message(
+        session=session,
+        admin_username=admin.get("sub", "admin"),
+    )
+    return {"message": msg, "status": "reset"}
+
 

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -7,17 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.bot.bot_instance import get_bot
 from src.core.config import settings
 from src.core.database import get_db
+from src.core.logger import setup_logger
 from src.models.channel import RequiredChannel
 from src.services.audit_service import AuditService
 from src.services.must_join_service import MustJoinService
 from src.web.auth import get_current_admin
 
+logger = setup_logger("must_join_routes")
 router = APIRouter(prefix="/api/must-join", tags=["Must Join"])
 
 
 class AddChannelRequest(BaseModel):
-    chat_id: int
-    title: str
+    chat_id: Union[int, str]
+    title: Optional[str] = None
     username: Optional[str] = None
     invite_url: Optional[str] = None
     enabled: bool = True
@@ -91,25 +93,82 @@ async def add_channel(
     admin: dict = Depends(get_current_admin),
 ):
     bot = get_bot()
-    is_admin, status_detail = await MustJoinService.verify_bot_is_admin(bot, req.chat_id)
-    if not is_admin:
-        raise HTTPException(
-            status_code=400,
-            detail=f"❌ Bot is not an administrator in this channel: {status_detail}",
-        )
+
+    # Parse chat_id identifier (numeric ID or @username)
+    raw_target = str(req.chat_id).strip()
+    target_id: Union[int, str]
+    if raw_target.startswith("@"):
+        target_id = raw_target
+    else:
+        try:
+            target_id = int(raw_target)
+        except ValueError:
+            target_id = raw_target
+
+    chat_obj = None
+    if bot:
+        try:
+            chat_obj = await bot.get_chat(chat_id=target_id)
+        except Exception as e:
+            logger.warning("Could not fetch chat info for %s: %s", target_id, e)
+
+    numeric_chat_id = getattr(chat_obj, "id", None)
+    if numeric_chat_id is None:
+        if isinstance(target_id, int):
+            numeric_chat_id = target_id
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not resolve Telegram chat for '{target_id}'. Make sure the bot is added to the channel as an administrator.",
+            )
+
+    is_admin = True
+    status_detail = "Bot is administrator"
+    if bot:
+        is_admin, status_detail = await MustJoinService.verify_bot_is_admin(bot, numeric_chat_id)
+        if not is_admin:
+            raise HTTPException(
+                status_code=400,
+                detail=f"❌ Bot is not an administrator in this channel ({numeric_chat_id}): {status_detail}",
+            )
+
+    # Auto-resolve metadata
+    title = (req.title.strip() if req.title and req.title.strip() else None)
+    if not title:
+        title = (getattr(chat_obj, "title", None) or str(numeric_chat_id))
+
+    username = (req.username.lstrip("@").strip() if req.username and req.username.strip() else None)
+    if not username and getattr(chat_obj, "username", None):
+        username = chat_obj.username
+
+    invite_url = (req.invite_url.strip() if req.invite_url and req.invite_url.strip() else None)
+    if not invite_url:
+        if getattr(chat_obj, "invite_link", None):
+            invite_url = chat_obj.invite_link
+        elif username:
+            invite_url = f"https://t.me/{username}"
+        elif bot:
+            try:
+                invite_url = await bot.export_chat_invite_link(numeric_chat_id)
+            except Exception:
+                try:
+                    created_link = await bot.create_chat_invite_link(numeric_chat_id)
+                    invite_url = created_link.invite_link
+                except Exception:
+                    pass
 
     # Check for existing
-    stmt = select(RequiredChannel).where(RequiredChannel.chat_id == req.chat_id)
+    stmt = select(RequiredChannel).where(RequiredChannel.chat_id == numeric_chat_id)
     res = await session.execute(stmt)
     existing = res.scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=400, detail="Channel with this Chat ID already exists")
+        raise HTTPException(status_code=400, detail=f"Channel with Chat ID {numeric_chat_id} already exists")
 
     ch = RequiredChannel(
-        chat_id=req.chat_id,
-        title=req.title,
-        username=req.username.lstrip("@") if req.username else None,
-        invite_url=req.invite_url,
+        chat_id=numeric_chat_id,
+        title=title,
+        username=username,
+        invite_url=invite_url,
         enabled=req.enabled,
         bot_status="administrator" if is_admin else "not_admin",
         last_bot_check=datetime.now(timezone.utc),
@@ -119,9 +178,16 @@ async def add_channel(
     await session.refresh(ch)
 
     await AuditService.log_action(
-        session, "CHANNEL_ADD", admin["sub"], f"Added required channel {req.title} ({req.chat_id})"
+        session, "CHANNEL_ADD", admin["sub"], f"Added required channel {title} ({numeric_chat_id})"
     )
-    return {"status": "added", "channel_id": ch.id}
+    return {
+        "status": "added",
+        "channel_id": ch.id,
+        "title": ch.title,
+        "chat_id": ch.chat_id,
+        "username": ch.username,
+        "invite_url": ch.invite_url,
+    }
 
 
 @router.put("/channels/{channel_id}")
@@ -191,6 +257,59 @@ async def test_channel_bot_status(
     return {
         "is_admin": is_admin,
         "detail": status_detail,
+        "bot_status": ch.bot_status,
+    }
+
+
+@router.post("/channels/{channel_id}/sync")
+async def sync_channel_info(
+    channel_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_current_admin),
+):
+    stmt = select(RequiredChannel).where(RequiredChannel.id == channel_id)
+    res = await session.execute(stmt)
+    ch = res.scalar_one_or_none()
+    if not ch:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    bot = get_bot()
+    chat_obj = None
+    if bot:
+        try:
+            chat_obj = await bot.get_chat(chat_id=ch.chat_id)
+            if getattr(chat_obj, "title", None):
+                ch.title = chat_obj.title
+            if getattr(chat_obj, "username", None):
+                ch.username = chat_obj.username
+            if getattr(chat_obj, "invite_link", None):
+                ch.invite_url = chat_obj.invite_link
+            elif getattr(chat_obj, "username", None) and not ch.invite_url:
+                ch.invite_url = f"https://t.me/{chat_obj.username}"
+        except Exception as e:
+            logger.warning("Could not sync chat info for %s: %s", ch.chat_id, e)
+
+    is_admin = True
+    status_detail = "Bot is administrator"
+    if bot:
+        is_admin, status_detail = await MustJoinService.verify_bot_is_admin(bot, ch.chat_id)
+        ch.bot_status = "administrator" if is_admin else "not_admin"
+        ch.last_bot_check = datetime.now(timezone.utc)
+        ch.last_error = None if is_admin else status_detail
+
+    await session.commit()
+    await session.refresh(ch)
+
+    await AuditService.log_action(
+        session, "CHANNEL_SYNC", admin["sub"], f"Synchronized metadata for required channel {ch.title} ({ch.chat_id})"
+    )
+
+    return {
+        "status": "synced",
+        "title": ch.title,
+        "username": ch.username,
+        "invite_url": ch.invite_url,
+        "is_admin": is_admin,
         "bot_status": ch.bot_status,
     }
 

@@ -637,6 +637,7 @@ async function loadMustJoin() {
             <td><span class="badge ${ch.enabled ? 'badge-success' : 'badge-secondary'}">${ch.enabled ? 'Enabled' : 'Disabled'}</span></td>
             <td class="font-sm">${formatDate(ch.last_bot_check)}</td>
             <td>
+              <button class="btn btn-secondary btn-sm" onclick="syncChannel(${ch.id})" title="Sync Channel Title & Info from Telegram">Sync</button>
               <button class="btn btn-secondary btn-sm" onclick="testChannel(${ch.id})" title="Verify Bot Permissions">Verify</button>
               <button class="btn btn-danger btn-sm" onclick="deleteChannel(${ch.id})" title="Remove Channel">Remove</button>
             </td>
@@ -669,15 +670,23 @@ async function toggleMustJoin() {
 async function addChannelModalSubmit(e) {
   e.preventDefault();
   hideAlert('add-channel-alert');
-  const cid     = parseInt(document.getElementById('mj-chat-id').value, 10);
-  const title   = document.getElementById('mj-title').value;
-  const username = document.getElementById('mj-username').value;
-  const invite  = document.getElementById('mj-invite').value;
+  const targetId = document.getElementById('mj-chat-id').value.trim();
+  const title    = document.getElementById('mj-title').value.trim();
+  const username = document.getElementById('mj-username').value.trim();
+  const invite   = document.getElementById('mj-invite').value.trim();
+
+  if (!targetId) {
+    showAlert('add-channel-alert', 'Channel Chat ID or @username is required', 'error');
+    return;
+  }
+
+  const submitBtn = document.querySelector('button[form="form-add-channel"]') || e.target.querySelector('button[type="submit"]');
+  setButtonLoading(submitBtn, true, 'Adding…', 'Add Channel');
 
   try {
-    await API.post('/api/must-join/channels', {
-      chat_id: cid,
-      title,
+    const res = await API.post('/api/must-join/channels', {
+      chat_id: targetId,
+      title: title || null,
       username: username || null,
       invite_url: invite || null,
       enabled: true,
@@ -685,11 +694,23 @@ async function addChannelModalSubmit(e) {
     document.getElementById('modal-add-channel').classList.remove('active');
     document.getElementById('form-add-channel').reset();
     loadMustJoin();
-    toastSuccess(`Channel "${title}" added successfully`);
+    toastSuccess(`Channel "${res.title || targetId}" added successfully`, 'Channel Added');
   } catch (err) {
     showAlert('add-channel-alert', err.message, 'error');
     toastError(err.message, 'Add Channel Failed');
+  } finally {
+    setButtonLoading(submitBtn, false, 'Adding…', 'Add Channel');
   }
+}
+
+async function syncChannel(id) {
+  try {
+    const res = await API.post(`/api/must-join/channels/${id}/sync`, {});
+    toastSuccess(`Channel "${res.title || id}" synced with Telegram`, 'Metadata Synced');
+  } catch (err) {
+    toastError(err.message, 'Channel Sync Error');
+  }
+  loadMustJoin();
 }
 
 async function testChannel(id) {
@@ -1330,11 +1351,64 @@ async function resetHelpMessage() {
   }
 }
 
+async function loadUnsupportedLinkMessage() {
+  try {
+    const res = await API.get('/api/telegram/unsupported-link-message');
+    const area = document.getElementById('bot-unsupported-link-msg-area');
+    if (area) area.value = res.message || '';
+  } catch (err) {
+    console.error('Failed to load unsupported link message:', err);
+  }
+}
+
+async function saveUnsupportedLinkMessage() {
+  hideAlert('bot-unsupported-link-alert');
+  const btn = document.getElementById('btn-save-unsupported-link');
+  const area = document.getElementById('bot-unsupported-link-msg-area');
+  const val = area ? area.value.trim() : '';
+
+  setButtonLoading(btn, true, 'Saving…', 'Save Message');
+  try {
+    const res = await API.post('/api/telegram/unsupported-link-message', { message: val });
+    if (area) area.value = res.message;
+    showAlert('bot-unsupported-link-alert', 'Unsupported link message template saved successfully', 'success');
+    toastSuccess('Unsupported link message saved', 'Bot Messages');
+  } catch (err) {
+    showAlert('bot-unsupported-link-alert', `Failed to save: ${err.message}`, 'error');
+    toastError(err.message, 'Save Failed');
+  } finally {
+    setButtonLoading(btn, false, 'Saving…', 'Save Message');
+  }
+}
+
+async function resetUnsupportedLinkMessage() {
+  hideAlert('bot-unsupported-link-alert');
+  const confirmed = await showConfirm('Reset unsupported link message to system default?', 'Reset Message', 'Reset', 'btn-warning');
+  if (!confirmed) return;
+
+  const btn = document.getElementById('btn-reset-unsupported-link');
+  const area = document.getElementById('bot-unsupported-link-msg-area');
+
+  setButtonLoading(btn, true, 'Resetting…', 'Reset');
+  try {
+    const res = await API.post('/api/telegram/unsupported-link-message/reset', {});
+    if (area) area.value = res.message || '';
+    showAlert('bot-unsupported-link-alert', 'Unsupported link message reset to default template', 'success');
+    toastSuccess('Unsupported link message reset to default');
+  } catch (err) {
+    showAlert('bot-unsupported-link-alert', `Failed to reset: ${err.message}`, 'error');
+    toastError(err.message, 'Reset Failed');
+  } finally {
+    setButtonLoading(btn, false, 'Resetting…', 'Reset');
+  }
+}
+
 async function loadBotMessages() {
   await Promise.all([
     loadWelcomeMessage(),
     loadHelpMessage(),
-    loadMustJoinMessage()
+    loadMustJoinMessage(),
+    loadUnsupportedLinkMessage()
   ]);
 }
 
@@ -1346,4 +1420,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-reset-help')?.addEventListener('click', resetHelpMessage);
   document.getElementById('btn-save-must-join')?.addEventListener('click', saveMustJoinMessage);
   document.getElementById('btn-reset-must-join')?.addEventListener('click', resetMustJoinMessage);
+  document.getElementById('btn-save-unsupported-link')?.addEventListener('click', saveUnsupportedLinkMessage);
+  document.getElementById('btn-reset-unsupported-link')?.addEventListener('click', resetUnsupportedLinkMessage);
 });
