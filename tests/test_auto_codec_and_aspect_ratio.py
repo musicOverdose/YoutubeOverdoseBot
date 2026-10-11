@@ -224,7 +224,7 @@ async def test_prepare_video_thumbnail_falls_back_to_ffmpeg_when_no_official():
             )
 
             assert ok is True
-            mock_extract.assert_awaited_once_with(fake_video, out_thumb, 15)
+            mock_extract.assert_awaited_once_with(fake_video, out_thumb, 15, is_vertical=True, target_ratio=None)
 
 
 @pytest.mark.asyncio

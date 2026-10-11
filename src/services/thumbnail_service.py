@@ -32,6 +32,67 @@ class ThumbnailService:
     MAX_DIMENSION: int = 1280
     MAX_FILE_BYTES: int = 195 * 1024  # 195 KB (strict Telegram limit is 200 KB)
 
+    @staticmethod
+    def _get_res_tier(area: int) -> int:
+        """
+        Categorizes pixel area into distinct resolution tiers:
+        Tier 3: HD 720p / 1080p+ (>= 690,000 px, e.g. 1280x720, 1920x1080)
+        Tier 2: SD 480p (>= 230,000 px, e.g. 640x480, 854x480)
+        Tier 1: 360p (>= 129,000 px, e.g. 480x360)
+        Tier 0: Tiny / mobile notifications (< 129,000 px, e.g. 320x180, 168x94, 120x90)
+        """
+        if area >= 690000:
+            return 3  # HD (720p, 1080p, 4K)
+        if area >= 230000:
+            return 2  # SD (480p)
+        if area >= 129000:
+            return 1  # Low (360p)
+        return 0  # Tiny (<360p)
+
+    @classmethod
+    def _rank_candidates_list(cls, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Ranks thumbnail candidates strictly by:
+        1. Resolution tier (1080p > 720p > 480p > 360p > tiny).
+        2. Security/versioning token (within the same resolution tier, live tokenized creator
+           artwork beats stale bare CDN URLs).
+        3. Exact pixel area.
+        4. JPEG format preference (Telegram native compatibility).
+        5. yt-dlp preference score.
+        """
+        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int, int, int]:
+            url = str(t.get("url") or "")
+            w = t.get("width") or 0
+            h = t.get("height") or 0
+
+            url_lower = url.lower()
+            id_lower = str(t.get("id") or "").lower()
+
+            if w > 0 and h > 0:
+                area = w * h
+            else:
+                if "maxres" in url_lower or "maxres" in id_lower:
+                    area = 1920 * 1080
+                elif "hq720" in url_lower or "hq720" in id_lower:
+                    area = 1280 * 720
+                elif "sddefault" in url_lower or "sddefault" in id_lower:
+                    area = 640 * 480
+                elif "hqdefault" in url_lower or "hqdefault" in id_lower:
+                    area = 480 * 360
+                elif "mqdefault" in url_lower or "mqdefault" in id_lower:
+                    area = 320 * 180
+                else:
+                    area = 0
+
+            res_tier = cls._get_res_tier(area)
+            has_token = 1 if ("sqp=" in url or "rs=" in url) else 0
+            is_jpeg = 1 if (".jpg" in url_lower or ".jpeg" in url_lower) else 0
+            pref = t.get("preference") if t.get("preference") is not None else 0
+
+            return (res_tier, has_token, area, is_jpeg, pref)
+
+        return sorted(candidates, key=_thumb_score, reverse=True)
+
     @classmethod
     def _rank_thumbnails(cls, info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not info:
@@ -46,37 +107,7 @@ class ThumbnailService:
         if main_thumb and not any(t.get("url") == main_thumb for t in valid_thumbs):
             valid_thumbs.append({"url": main_thumb, "id": "main_thumb"})
 
-        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int, int]:
-            url = str(t.get("url") or "")
-            w = t.get("width") or 0
-            h = t.get("height") or 0
-            area = w * h
-
-            url_lower = url.lower()
-            id_lower = str(t.get("id") or "").lower()
-
-            # Active security & versioning tokens (?sqp=... &rs=...) indicate authoritative, live thumbnails from YouTube API!
-            has_token = 1 if ("sqp=" in url or "rs=" in url) else 0
-
-            name_bonus = 0
-            if "maxres" in url_lower or "maxres" in id_lower:
-                name_bonus = 1920 * 1080
-            elif "hq720" in url_lower or "hq720" in id_lower:
-                name_bonus = 1280 * 720
-            elif "sddefault" in url_lower or "sddefault" in id_lower:
-                name_bonus = 640 * 480
-            elif "hqdefault" in url_lower or "hqdefault" in id_lower:
-                name_bonus = 480 * 360
-            elif "mqdefault" in url_lower or "mqdefault" in id_lower:
-                name_bonus = 320 * 180
-
-            effective_area = max(area, name_bonus)
-            is_jpeg = 1 if (".jpg" in url_lower or ".jpeg" in url_lower) else 0
-            pref = t.get("preference") if t.get("preference") is not None else 0
-
-            return (has_token, effective_area, is_jpeg, pref)
-
-        return sorted(valid_thumbs, key=_thumb_score, reverse=True)
+        return cls._rank_candidates_list(valid_thumbs)
 
     @classmethod
     def get_best_thumbnail_url(cls, info: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -98,7 +129,8 @@ class ThumbnailService:
     ) -> List[str]:
         """
         Returns a deduplicated list of candidate thumbnail URLs in descending order of quality.
-        Allows graceful fallback if the top speculative URL (e.g. maxresdefault on 240p video) returns 404.
+        Ranks by resolution tier (1080p > 720p > 480p > 360p > tiny), prioritizing live tokenized
+        URLs within the same resolution tier, and integrating deterministic fallback endpoints.
         """
         if not info and not source_id:
             return []
@@ -106,42 +138,42 @@ class ThumbnailService:
         if not source_id and info:
             source_id = info.get("id")
 
-        urls = []
-        seen = set()
+        candidates: List[Dict[str, Any]] = []
 
         # 1. Authoritative, live thumbnail URLs from yt-dlp metadata
-        # These contain active ?sqp=... and &rs=... security/versioning tokens that reflect
-        # the creator's latest thumbnail upload (and A/B testing selections)
         if info:
-            sorted_thumbs = cls._rank_thumbnails(info)
-            for t in sorted_thumbs:
-                u = t.get("url")
-                if u and u not in seen:
-                    seen.add(u)
-                    urls.append(u)
+            thumbnails = info.get("thumbnails")
+            if thumbnails and isinstance(thumbnails, list):
+                candidates.extend([t for t in thumbnails if isinstance(t, dict) and t.get("url")])
 
             main_thumb = info.get("thumbnail")
-            if main_thumb and main_thumb not in seen:
-                seen.add(main_thumb)
-                urls.append(main_thumb)
+            if main_thumb and not any(t.get("url") == main_thumb for t in candidates):
+                candidates.append({"url": main_thumb, "id": "main_thumb"})
 
-        # 2. Speculative deterministic high-resolution endpoints as fallback
-        # Used only if metadata URLs returned 404 or video info was unavailable
+        # 2. Inject deterministic high-resolution endpoints
         if source_id and len(source_id) == 11:
-            deterministic_urls = [
-                f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg",
-                f"https://i.ytimg.com/vi/{source_id}/maxresdefault.webp",
-                f"https://i.ytimg.com/vi/{source_id}/hq720.jpg",
-                f"https://i.ytimg.com/vi/{source_id}/hq720.webp",
-                f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg",
-                f"https://i.ytimg.com/vi/{source_id}/sddefault.webp",
-                f"https://i.ytimg.com/vi/{source_id}/hqdefault.jpg",
-                f"https://i.ytimg.com/vi/{source_id}/hqdefault.webp",
+            deterministic_candidates = [
+                {"url": f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg", "id": "det_maxres_jpg", "width": 1920, "height": 1080, "preference": -1},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/maxresdefault.webp", "id": "det_maxres_webp", "width": 1920, "height": 1080, "preference": -1},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hq720.jpg", "id": "det_hq720_jpg", "width": 1280, "height": 720, "preference": -2},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hq720.webp", "id": "det_hq720_webp", "width": 1280, "height": 720, "preference": -2},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg", "id": "det_sddefault_jpg", "width": 640, "height": 480, "preference": -3},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/sddefault.webp", "id": "det_sddefault_webp", "width": 640, "height": 480, "preference": -3},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hqdefault.jpg", "id": "det_hqdefault_jpg", "width": 480, "height": 360, "preference": -4},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hqdefault.webp", "id": "det_hqdefault_webp", "width": 480, "height": 360, "preference": -4},
             ]
-            for u in deterministic_urls:
-                if u not in seen:
-                    seen.add(u)
-                    urls.append(u)
+            for dc in deterministic_candidates:
+                if not any(t.get("url") == dc["url"] for t in candidates):
+                    candidates.append(dc)
+
+        ranked = cls._rank_candidates_list(candidates)
+        urls = []
+        seen = set()
+        for t in ranked:
+            u = t.get("url")
+            if u and u not in seen:
+                seen.add(u)
+                urls.append(u)
 
         return urls
 
@@ -570,9 +602,11 @@ class ThumbnailService:
         video_path: str,
         output_thumb_path: str,
         duration: Optional[int] = None,
+        is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
     ) -> bool:
         """
-        Fallback when no official YouTube thumbnail exists:
+        Fallback when no official YouTube thumbnail exists or available thumbnail is low-resolution:
         Extracts a representative native-resolution video frame using FFmpeg,
         checks for dark/black frames, and processes via Pillow Lanczos.
         """
@@ -584,15 +618,15 @@ class ThumbnailService:
         if dur is None or dur <= 0:
             dur = 10
 
-        # Primary timestamp at ~15% of duration (avoids 0.0s/1.0s intros and black frames)
-        primary_seek = min(15.0, float(dur) * 0.15) if dur > 2 else 0.0
-        candidate_seeks = [primary_seek]
-        if dur >= 2:
+        # Candidates: 0.5s, 1.0s (intro cards / early action), ~15% duration, 25%, 50%, 0.0s
+        candidate_seeks = [0.5, 1.0]
+        if dur > 2:
+            primary_seek = min(15.0, float(dur) * 0.15)
+            if primary_seek not in candidate_seeks:
+                candidate_seeks.append(primary_seek)
             candidate_seeks.append(min(30.0, float(dur) * 0.25))
             candidate_seeks.append(float(dur) * 0.50)
             candidate_seeks.append(float(dur) * 0.75)
-        if 1.0 not in candidate_seeks and dur > 3:
-            candidate_seeks.append(1.0)
         if 0.0 not in candidate_seeks:
             candidate_seeks.append(0.0)
 
@@ -625,7 +659,7 @@ class ThumbnailService:
                             if extrema and extrema[1] >= 20:
                                 best_frame_path = frame_path
                                 logger.info(
-                                    "Extracted non-black frame at %.2fs for fallback thumbnail", seek_t
+                                    "Extracted non-black frame at %.2fs for thumbnail", seek_t
                                 )
                                 break
                             else:
@@ -636,11 +670,16 @@ class ThumbnailService:
                         logger.debug("Error inspecting extracted frame: %s", img_err)
 
             if not best_frame_path or not os.path.exists(best_frame_path):
-                logger.warning("FFmpeg fallback frame extraction failed for %s", video_path)
+                logger.warning("FFmpeg frame extraction failed for %s", video_path)
                 return False
 
             # Process the extracted native frame through Pillow Lanczos pipeline
-            return cls.process_image_file(best_frame_path, output_thumb_path)
+            return cls.process_image_file(
+                best_frame_path,
+                output_thumb_path,
+                is_vertical=is_vertical,
+                target_ratio=target_ratio,
+            )
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -701,4 +740,6 @@ class ThumbnailService:
 
         # Step 3: Fallback native-resolution frame extraction via FFmpeg
         logger.info("No usable official YouTube thumbnail found. Falling back to FFmpeg frame extraction.")
-        return await cls.extract_frame_fallback(video_path, output_thumb_path, duration)
+        return await cls.extract_frame_fallback(
+            video_path, output_thumb_path, duration, is_vertical=is_vertical, target_ratio=target_ratio
+        )

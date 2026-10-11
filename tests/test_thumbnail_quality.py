@@ -708,5 +708,93 @@ def test_tokenized_thumbnails_beat_bare_urls_with_higher_preference():
     assert ranked[0]["url"] == "https://i.ytimg.com/vi/Qpi_xEujan0/maxres2.jpg?sqp=token_1080&rs=token_rs"
 
 
+def test_tiny_tokenized_thumbnails_never_beat_hd_bare_urls():
+    """
+    Verifies that a tiny 168x94 tokenized thumbnail (from YouTube API notifications/search)
+    never beats a 1080p bare URL (such as maxresdefault.jpg on Despacito).
+    Resolution tier must always dominate over token presence.
+    """
+    metadata = {
+        "id": "kJQP7kiw5Fk",
+        "thumbnails": [
+            {
+                "id": "31",
+                "url": "https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg?sqp=token_tiny",
+                "width": 168,
+                "height": 94,
+                "preference": -7,
+            },
+            {
+                "id": "36",
+                "url": "https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg?sqp=token_med",
+                "width": 480,
+                "height": 360,
+                "preference": -7,
+            },
+            {
+                "id": "42",
+                "url": "https://i.ytimg.com/vi/kJQP7kiw5Fk/maxresdefault.jpg",
+                "width": None,
+                "height": None,
+                "preference": -1,
+            },
+        ],
+    }
+    cands = ThumbnailService.get_candidate_thumbnail_urls(metadata, source_id="kJQP7kiw5Fk")
+    # Top candidate MUST be maxresdefault (1080p tier), NOT the tiny 168x94 tokenized image!
+    assert len(cands) > 0
+    assert "maxresdefault" in cands[0]
+    # The 168x94 thumbnail must be at the very bottom
+    assert "token_tiny" not in cands[0]
+
+
+def test_b15ftNfMjK8_selects_sddefault_over_tiny_tokenized_urls():
+    """
+    For videos like b15ftNfMjK8 where maxres and hq720 return 404, but sddefault (640x480) exists,
+    sddefault.jpg (Tier 2) must be prioritized over tiny 168x94 or 320x180 tokenized endpoints.
+    """
+    metadata = {
+        "id": "b15ftNfMjK8",
+        "thumbnails": [
+            {
+                "id": "32",
+                "url": "https://i.ytimg.com/vi/b15ftNfMjK8/hqdefault.jpg?sqp=token_168",
+                "width": 168,
+                "height": 94,
+                "preference": -7,
+            },
+            {
+                "id": "27",
+                "url": "https://i.ytimg.com/vi/b15ftNfMjK8/mqdefault.jpg?sqp=token_320",
+                "width": 320,
+                "height": 180,
+                "preference": -11,
+            },
+            {
+                "id": "36",
+                "url": "https://i.ytimg.com/vi/b15ftNfMjK8/hqdefault.jpg?sqp=token_480",
+                "width": 480,
+                "height": 360,
+                "preference": -7,
+            },
+            {
+                "id": "38",
+                "url": "https://i.ytimg.com/vi/b15ftNfMjK8/sddefault.jpg",
+                "width": None,
+                "height": None,
+                "preference": -5,
+            },
+        ],
+    }
+    cands = ThumbnailService.get_candidate_thumbnail_urls(metadata, source_id="b15ftNfMjK8")
+    # Candidates 0 and 1 will be speculative maxres and hq720 (which get 404 on b15)
+    # The first metadata / sddefault URL must be sddefault.jpg (Tier 2, 640x480)
+    # followed by 480x360, and tiny 168x94 must be last!
+    sd_idx = next(i for i, u in enumerate(cands) if "sddefault" in u)
+    tiny_idx = next(i for i, u in enumerate(cands) if "token_168" in u)
+    assert sd_idx < tiny_idx
+
+
+
 
 

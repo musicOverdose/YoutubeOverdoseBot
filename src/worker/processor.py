@@ -452,6 +452,41 @@ class JobProcessor:
                         except Exception as fe:
                             logger.debug("Could not convert found_thumb_file to cover: %s", fe)
 
+                    # Check resolution fidelity of downloaded cover vs native video
+                    use_frame_extraction = False
+                    if early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
+                        # Video is HD (>= 720p). If cover art is low-res (e.g. YouTube auto-generated 480p pillarbox),
+                        # extract crystal-clear native frame directly from the HD video stream!
+                        if cover_downloaded and os.path.exists(raw_cover_path):
+                            try:
+                                with Image.open(raw_cover_path) as cimg:
+                                    cw, ch = cimg.size
+                                    if (is_vertical and cw < 500) or (not is_vertical and max(cw, ch) < 640):
+                                        logger.info(
+                                            "Cover art resolution is low (%dx%d) for HD video (%dx%d). "
+                                            "Extracting native HD frame directly from video stream...",
+                                            cw, ch, early_w, early_h,
+                                        )
+                                        use_frame_extraction = True
+                            except Exception as c_err:
+                                logger.debug("Error checking cover art dimensions: %s", c_err)
+                        else:
+                            use_frame_extraction = True
+
+                    if use_frame_extraction:
+                        try:
+                            frame_ok = await ThumbnailService.extract_frame_fallback(
+                                video_path=input_file,
+                                output_thumb_path=raw_cover_path,
+                                duration=_dur,
+                                is_vertical=is_vertical,
+                                target_ratio=target_ratio,
+                            )
+                            if frame_ok and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                                cover_downloaded = True
+                        except Exception as frame_err:
+                            logger.warning("Native frame extraction error: %s", frame_err)
+
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
                     await notifier.update("🔧", "Remuxing (stream copy)...", f"Muxing {target_codec} source into MP4 container...", force=True)
