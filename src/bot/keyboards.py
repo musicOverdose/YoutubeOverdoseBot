@@ -38,6 +38,11 @@ def build_quality_keyboard(
     ]
     keyboard.append(utility_row)
 
+    # Full quality thumbnail download button
+    keyboard.append([
+        InlineKeyboardButton(text="🖼 Download Thumbnail", callback_data=f"thumb:{source_id}"),
+    ])
+
     # Cancel request button
     keyboard.append([
         InlineKeyboardButton(text="❌ Cancel", callback_data="req_cancel"),

@@ -376,3 +376,139 @@ async def test_ffmpeg_service_backward_compatibility(tmp_path):
     with Image.open(out_thumb) as img:
         assert img.format == "JPEG"
         assert img.size == (640, 360)
+
+
+@pytest.mark.asyncio
+async def test_prepare_preview_photo_falls_back_when_maxres_404(tmp_path):
+    """
+    Simulates the exact scenario for older/low-res videos (e.g. 2005 'Me at the zoo' jNQXAC9IVRw):
+    maxresdefault and other HD endpoints return 404, but hqdefault returns 200.
+    Verifies that prepare_preview_photo falls back and generates a valid JPEG preview.
+    """
+    out_preview = str(tmp_path / "preview.jpg")
+    sample_img = tmp_path / "hqdefault.jpg"
+    Image.new("RGB", (480, 360), color=(100, 150, 200)).save(str(sample_img), "JPEG")
+    sample_bytes = sample_img.read_bytes()
+
+    metadata = {
+        "id": "jNQXAC9IVRw",
+        "thumbnail": "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg",
+        "thumbnails": [
+            {"id": "maxresdefault", "url": "https://i.ytimg.com/vi/jNQXAC9IVRw/maxresdefault.jpg"},
+            {"id": "hqdefault", "url": "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg"},
+        ],
+    }
+
+    async def fake_get(url):
+        mock_resp = MagicMock()
+        if "maxresdefault" in str(url) or "hq720" in str(url) or "sddefault" in str(url):
+            mock_resp.status_code = 404
+            mock_resp.content = b""
+        elif "hqdefault" in str(url):
+            mock_resp.status_code = 200
+            mock_resp.content = sample_bytes
+        else:
+            mock_resp.status_code = 404
+            mock_resp.content = b""
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=fake_get):
+        ok = await ThumbnailService.prepare_preview_photo(
+            info=metadata,
+            source_id="jNQXAC9IVRw",
+            output_path=out_preview,
+            is_vertical=False,
+        )
+        assert ok is True
+        assert os.path.exists(out_preview)
+        with Image.open(out_preview) as img:
+            assert img.format == "JPEG"
+            assert img.size == (480, 360)
+
+
+@pytest.mark.asyncio
+async def test_prepare_preview_photo_vertical_shorts_cropping(tmp_path):
+    """
+    Verifies that for vertical Shorts, prepare_preview_photo automatically crops
+    16:9 pillarbox margins to 9:16 vertical orientation.
+    """
+    out_preview = str(tmp_path / "preview_vertical.jpg")
+    sample_img = tmp_path / "horizontal_short.jpg"
+    Image.new("RGB", (1280, 720), color=(50, 100, 150)).save(str(sample_img), "JPEG")
+    sample_bytes = sample_img.read_bytes()
+
+    async def fake_get(url):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = sample_bytes
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=fake_get):
+        ok = await ThumbnailService.prepare_preview_photo(
+            info=None,
+            source_id="short123456",
+            output_path=out_preview,
+            is_vertical=True,
+        )
+        assert ok is True
+        assert os.path.exists(out_preview)
+        with Image.open(out_preview) as img:
+            assert img.format == "JPEG"
+            # 9:16 aspect ratio: width must be smaller than height
+            assert img.width < img.height
+            assert abs((img.width / float(img.height)) - (9 / 16)) < 0.05
+
+
+@pytest.mark.asyncio
+async def test_prepare_preview_photo_returns_false_when_all_fail(tmp_path):
+    out_preview = str(tmp_path / "preview_fail.jpg")
+
+    async def fake_get(url):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.content = b""
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=fake_get):
+        ok = await ThumbnailService.prepare_preview_photo(
+            info=None,
+            source_id="nonexistent1",
+            output_path=out_preview,
+            is_vertical=False,
+        )
+        assert ok is False
+        assert not os.path.exists(out_preview)
+
+
+@pytest.mark.asyncio
+async def test_download_full_thumbnail_file(tmp_path):
+    """
+    Verifies download_full_thumbnail_file retrieves the uncompressed full resolution image.
+    """
+    out_full = str(tmp_path / "full_art.jpg")
+    sample_img = tmp_path / "sample_1080p.jpg"
+    Image.new("RGB", (1920, 1080), color=(80, 180, 240)).save(str(sample_img), "JPEG")
+    sample_bytes = sample_img.read_bytes()
+
+    async def fake_get(url):
+        mock_resp = MagicMock()
+        if "maxresdefault" in str(url):
+            mock_resp.status_code = 200
+            mock_resp.content = sample_bytes
+        else:
+            mock_resp.status_code = 404
+            mock_resp.content = b""
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=fake_get):
+        res = await ThumbnailService.download_full_thumbnail_file(
+            info=None,
+            source_id="abc12345678",
+            output_path=out_full,
+        )
+        assert res is not None
+        path, w, h = res
+        assert path == out_full
+        assert (w, h) == (1920, 1080)
+        assert os.path.exists(out_full)
+

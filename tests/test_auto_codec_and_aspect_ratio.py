@@ -8,7 +8,7 @@ from src.bot.keyboards import build_quality_keyboard, build_queue_status_keyboar
 from src.services.ytdlp_service import YtDlpService
 from src.services.thumbnail_service import ThumbnailService
 from src.services.ffmpeg_service import FFmpegService
-from src.bot.handlers.quality_handler import on_cancel_request
+from src.bot.handlers.quality_handler import on_cancel_request, on_download_thumbnail
 
 
 def test_auto_select_codec_prefers_h264():
@@ -88,6 +88,45 @@ def test_build_quality_keyboard_has_cancel_button():
     assert "req_cancel" in callbacks
     cancel_btn = next(btn for btn in all_buttons if btn.callback_data == "req_cancel")
     assert "Cancel" in cancel_btn.text
+
+    # Verify thumbnail download button is present
+    assert "thumb:abc12345678" in callbacks
+    thumb_btn = next(btn for btn in all_buttons if btn.callback_data == "thumb:abc12345678")
+    assert "Thumbnail" in thumb_btn.text
+
+
+@pytest.mark.asyncio
+async def test_on_download_thumbnail_delivers_document(tmp_path):
+    callback = MagicMock()
+    callback.data = "thumb:jNQXAC9IVRw"
+    callback.message = MagicMock()
+    callback.message.chat.id = 123456
+    callback.from_user.id = 123456
+    callback.answer = AsyncMock()
+
+    bot = MagicMock()
+    bot.send_document = AsyncMock()
+    bot.send_message = AsyncMock()
+
+    sample_img = tmp_path / "thumb.jpg"
+    Image.new("RGB", (1280, 720), color=(10, 20, 30)).save(str(sample_img), "JPEG")
+
+    async def fake_download(info, source_id, output_path):
+        import shutil
+        shutil.copy2(str(sample_img), output_path)
+        return (output_path, 1280, 720)
+
+    with patch("src.services.must_join_service.MustJoinService.enforce_must_join_callback", new_callable=AsyncMock, return_value=True), \
+         patch("src.services.ytdlp_service.YtDlpService.extract_metadata", new_callable=AsyncMock, return_value={"title": "Test Zoo Video"}), \
+         patch("src.services.thumbnail_service.ThumbnailService.download_full_thumbnail_file", side_effect=fake_download):
+
+        await on_download_thumbnail(callback, bot)
+
+        bot.send_document.assert_awaited_once()
+        args, kwargs = bot.send_document.call_args
+        assert kwargs["chat_id"] == 123456
+        assert "Test Zoo Video" in kwargs["caption"]
+        assert "1280x720" in kwargs["caption"]
 
 
 def test_build_queue_status_keyboard_has_no_cancel_button():

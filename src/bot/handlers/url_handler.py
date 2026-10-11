@@ -52,37 +52,31 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
         or "/shorts/" in canonical_url
     )
 
-    if thumbnail_url:
-        temp_preview = None
-        try:
-            if is_vertical:
-                os.makedirs(settings.TEMP_DIR, exist_ok=True)
-                temp_preview = os.path.join(settings.TEMP_DIR, f"prev_{uuid.uuid4().hex[:12]}.jpg")
-                cropped_ok = await ThumbnailService.create_vertical_preview_photo(thumbnail_url, temp_preview)
-                if cropped_ok and os.path.exists(temp_preview):
-                    await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=FSInputFile(temp_preview),
-                        caption=f"<b>{title}</b>",
-                        reply_markup=keyboard,
-                    )
-                    return
-
+    temp_preview = os.path.join(settings.TEMP_DIR, f"prev_{uuid.uuid4().hex[:12]}.jpg")
+    os.makedirs(settings.TEMP_DIR, exist_ok=True)
+    try:
+        preview_ready = await ThumbnailService.prepare_preview_photo(
+            info=info,
+            source_id=source_id,
+            output_path=temp_preview,
+            is_vertical=is_vertical,
+        )
+        if preview_ready and os.path.exists(temp_preview) and os.path.getsize(temp_preview) > 0:
             await bot.send_photo(
                 chat_id=chat_id,
-                photo=thumbnail_url,
+                photo=FSInputFile(temp_preview),
                 caption=f"<b>{title}</b>",
                 reply_markup=keyboard,
             )
             return
-        except Exception as e:
-            logger.warning(f"Could not send thumbnail photo: {e}. Falling back to text.")
-        finally:
-            if temp_preview and os.path.exists(temp_preview):
-                try:
-                    os.remove(temp_preview)
-                except OSError:
-                    pass
+    except Exception as e:
+        logger.warning(f"Could not send thumbnail photo: {e}. Falling back to text.")
+    finally:
+        if os.path.exists(temp_preview):
+            try:
+                os.remove(temp_preview)
+            except OSError:
+                pass
 
     await bot.send_message(
         chat_id=chat_id,

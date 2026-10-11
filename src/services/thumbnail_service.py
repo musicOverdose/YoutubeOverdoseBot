@@ -112,6 +112,9 @@ class ThumbnailService:
                 f"https://i.ytimg.com/vi/{source_id}/hq720.jpg",
                 f"https://i.ytimg.com/vi/{source_id}/hq720.webp",
                 f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg",
+                f"https://i.ytimg.com/vi/{source_id}/sddefault.webp",
+                f"https://i.ytimg.com/vi/{source_id}/hqdefault.jpg",
+                f"https://i.ytimg.com/vi/{source_id}/hqdefault.webp",
             ]
             for u in deterministic_urls:
                 if u not in seen:
@@ -318,21 +321,173 @@ class ThumbnailService:
                     pass
 
     @classmethod
+    async def prepare_preview_photo(
+        cls,
+        info: Optional[Dict[str, Any]],
+        source_id: Optional[str],
+        output_path: str,
+        is_vertical: bool = False,
+        timeout: float = 4.0,
+    ) -> bool:
+        """
+        Prepares a crisp, compliant JPEG preview photo for Telegram inline menus.
+        Iterates through candidate thumbnail URLs in descending quality order,
+        automatically skipping 404 speculative URLs (common on older or low-res videos),
+        crops pillarboxes for vertical Shorts, and saves as JPEG to output_path.
+        """
+        candidates = cls.get_candidate_thumbnail_urls(info, source_id)
+        if not candidates:
+            return False
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        temp_dl = output_path + ".cand.tmp"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=3.0),
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            ) as client:
+                for idx, url in enumerate(candidates[:15]):
+                    try:
+                        dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
+                        if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
+                            with Image.open(temp_dl) as img:
+                                img = img.convert("RGB")
+                                if is_vertical and img.width > img.height:
+                                    img = cls.crop_vertical_pillarbox(img)
+
+                                target_w, target_h = cls.fit_dimensions_inside_bounds(
+                                    img.width, img.height, cls.MAX_DIMENSION, cls.MAX_DIMENSION
+                                )
+                                if (img.width, img.height) != (target_w, target_h):
+                                    img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                                    img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
+
+                                ok = cls.save_image_adaptive_jpeg(img, output_path, cls.MAX_FILE_BYTES)
+                                if ok and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                                    logger.info(
+                                        "Prepared preview photo from candidate [%d] %s (%dx%d, %d bytes)",
+                                        idx, url, target_w, target_h, os.path.getsize(output_path),
+                                    )
+                                    return True
+                    except Exception as cand_err:
+                        logger.debug("Candidate preview thumbnail failed (%s): %s", url, cand_err)
+                        continue
+                    finally:
+                        if os.path.exists(temp_dl):
+                            try:
+                                os.remove(temp_dl)
+                            except OSError:
+                                pass
+        except Exception as e:
+            logger.warning("Error in prepare_preview_photo: %s", e)
+        finally:
+            if os.path.exists(temp_dl):
+                try:
+                    os.remove(temp_dl)
+                except OSError:
+                    pass
+
+        return False
+
+    @classmethod
+    async def download_full_thumbnail_file(
+        cls,
+        info: Optional[Dict[str, Any]],
+        source_id: str,
+        output_path: str,
+        timeout: float = 8.0,
+    ) -> Optional[Tuple[str, int, int]]:
+        """
+        Downloads the highest-quality original YouTube thumbnail without downscaling or extra lossy compression.
+        Iterates candidate URLs to bypass 404s and returns (file_path, width, height) if successful, None otherwise.
+        If the original image is WebP, it converts to high-quality JPEG (quality=98) so all devices can open it natively.
+        """
+        candidates = cls.get_candidate_thumbnail_urls(info, source_id)
+        if not candidates:
+            return None
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        temp_dl = output_path + ".full.tmp"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=4.0),
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            ) as client:
+                for idx, url in enumerate(candidates[:15]):
+                    try:
+                        dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
+                        if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
+                            with Image.open(temp_dl) as img:
+                                orig_w, orig_h = img.size
+                                orig_format = (img.format or "").upper()
+
+                                # If already JPEG and extension matches, copy file directly (zero re-compression)
+                                if orig_format in ("JPEG", "JPG") and output_path.lower().endswith((".jpg", ".jpeg")):
+                                    shutil.copy2(temp_dl, output_path)
+                                else:
+                                    # Convert to high-quality RGB JPEG (quality=98, 4:4:4 subsampling)
+                                    rgb_img = img.convert("RGB")
+                                    rgb_img.save(output_path, "JPEG", quality=98, subsampling=0)
+
+                                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                                    logger.info(
+                                        "Downloaded full thumbnail candidate [%d] %s (%dx%d, %d bytes)",
+                                        idx, url, orig_w, orig_h, os.path.getsize(output_path),
+                                    )
+                                    return (output_path, orig_w, orig_h)
+                    except Exception as cand_err:
+                        logger.debug("Candidate full thumbnail failed (%s): %s", url, cand_err)
+                        continue
+                    finally:
+                        if os.path.exists(temp_dl):
+                            try:
+                                os.remove(temp_dl)
+                            except OSError:
+                                pass
+        except Exception as e:
+            logger.warning("Error in download_full_thumbnail_file: %s", e)
+        finally:
+            if os.path.exists(temp_dl):
+                try:
+                    os.remove(temp_dl)
+                except OSError:
+                    pass
+
+        return None
+
+    @classmethod
     async def download_thumbnail_image(
         cls,
         url: str,
         output_path: str,
         timeout: float = 15.0,
+        client: Optional[httpx.AsyncClient] = None,
     ) -> bool:
         """
         Downloads a remote thumbnail image via HTTPX.
+        Supports connection reuse via optional client argument.
         """
         if not url:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            if client is not None:
                 resp = await client.get(url)
+                if resp.status_code == 200 and resp.content:
+                    with open(output_path, "wb") as f:
+                        f.write(resp.content)
+                    return True
+                logger.warning(
+                    "Failed to download thumbnail from %s: status %d", url, resp.status_code
+                )
+                return False
+
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as new_client:
+                resp = await new_client.get(url)
                 if resp.status_code == 200 and resp.content:
                     with open(output_path, "wb") as f:
                         f.write(resp.content)
