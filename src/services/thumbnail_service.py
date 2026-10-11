@@ -283,6 +283,113 @@ class ThumbnailService:
         return cropped
 
     @classmethod
+    def auto_crop_black_borders(
+        cls,
+        img: Image.Image,
+        tolerance: int = 18,
+        min_bar_px: int = 12,
+    ) -> Image.Image:
+        """
+        Detects and cleanly crops solid black pillarbox bars (left/right) or letterbox bars (top/bottom)
+        injected by YouTube (e.g. 16:9 canvas padding for 4:3 videos like O2jkV4BsN6U,
+        or 4:3 sddefault/hqdefault padding for 16:9 videos like r2hiI3P3TOI).
+        Ensures symmetry and non-destructive behavior on standard artwork.
+        """
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        w, h = img.size
+        pixels = img.load()
+
+        # 1. Left pillarbox
+        left = 0
+        for x in range(w):
+            step = max(1, h // 30)
+            is_black = True
+            for y in range(0, h, step):
+                r, g, b = pixels[x, y]
+                if r > tolerance or g > tolerance or b > tolerance:
+                    is_black = False
+                    break
+            if is_black:
+                left = x + 1
+            else:
+                break
+
+        # 2. Right pillarbox
+        right = w
+        for x in range(w - 1, -1, -1):
+            step = max(1, h // 30)
+            is_black = True
+            for y in range(0, h, step):
+                r, g, b = pixels[x, y]
+                if r > tolerance or g > tolerance or b > tolerance:
+                    is_black = False
+                    break
+            if is_black:
+                right = x
+            else:
+                break
+
+        # 3. Top letterbox
+        top = 0
+        for y in range(h):
+            step = max(1, w // 30)
+            is_black = True
+            for x in range(0, w, step):
+                r, g, b = pixels[x, y]
+                if r > tolerance or g > tolerance or b > tolerance:
+                    is_black = False
+                    break
+            if is_black:
+                top = y + 1
+            else:
+                break
+
+        # 4. Bottom letterbox
+        bottom = h
+        for y in range(h - 1, -1, -1):
+            step = max(1, w // 30)
+            is_black = True
+            for x in range(0, w, step):
+                r, g, b = pixels[x, y]
+                if r > tolerance or g > tolerance or b > tolerance:
+                    is_black = False
+                    break
+            if is_black:
+                bottom = y
+            else:
+                break
+
+        crop_l, crop_r = 0, w
+        crop_t, crop_b = 0, h
+
+        left_bar = left
+        right_bar = w - right
+        if left_bar >= min_bar_px and right_bar >= min_bar_px:
+            diff = abs(left_bar - right_bar)
+            if diff <= 30 or (0.6 <= left_bar / float(right_bar) <= 1.6):
+                crop_l = left
+                crop_r = right
+
+        top_bar = top
+        bottom_bar = h - bottom
+        if top_bar >= min_bar_px and bottom_bar >= min_bar_px:
+            diff = abs(top_bar - bottom_bar)
+            if diff <= 30 or (0.6 <= top_bar / float(bottom_bar) <= 1.6):
+                crop_t = top
+                crop_b = bottom
+
+        if crop_l > 0 or crop_r < w or crop_t > 0 or crop_b < h:
+            if crop_r > crop_l + 50 and crop_b > crop_t + 50:
+                logger.info(
+                    "Auto-cropped black borders: orig=(%d, %d), box=(%d, %d, %d, %d), new=(%d, %d)",
+                    w, h, crop_l, crop_t, crop_r, crop_b, crop_r - crop_l, crop_b - crop_t
+                )
+                return img.crop((crop_l, crop_t, crop_r, crop_b))
+
+        return img
+
+    @classmethod
     def process_image_file(
         cls,
         source_image_path: str,
@@ -306,6 +413,8 @@ class ThumbnailService:
                     ratio = target_ratio or (9 / 16)
                     logger.info("Cropping 16:9 pillarboxes for vertical content (ratio=%.4f) from: %s", ratio, source_image_path)
                     img = cls.crop_vertical_pillarbox(img, target_ratio=ratio)
+
+                img = cls.auto_crop_black_borders(img)
 
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
@@ -352,6 +461,8 @@ class ThumbnailService:
                 if is_vertical and img.width > img.height:
                     ratio = target_ratio or (9 / 16)
                     img = cls.crop_vertical_pillarbox(img, target_ratio=ratio)
+
+                img = cls.auto_crop_black_borders(img)
 
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
@@ -511,23 +622,97 @@ class ThumbnailService:
                         dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
                         if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
                             with Image.open(temp_dl) as img:
+                                img = img.convert("RGB")
+                                if is_vertical and img.width > img.height:
+                                    img = cls.crop_vertical_pillarbox(img)
+                                img = cls.auto_crop_black_borders(img)
+
+                                target_w, target_h = cls.fit_dimensions_inside_bounds(
+                                    img.width, img.height, cls.MAX_DIMENSION, cls.MAX_DIMENSION
+                                )
+                                if (img.width, img.height) != (target_w, target_h):
+                                    img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                                    img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
+
+                                ok = cls.save_image_adaptive_jpeg(img, output_path, cls.MAX_FILE_BYTES)
+                                if ok and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                                    logger.info(
+                                        "Prepared preview photo from candidate [%d] %s (%dx%d, %d bytes)",
+                                        idx, url, target_w, target_h, os.path.getsize(output_path),
+                                    )
+                                    return True
+                    except Exception as cand_err:
+                        logger.debug("Candidate preview thumbnail failed (%s): %s", url, cand_err)
+                        continue
+                    finally:
+                        if os.path.exists(temp_dl):
+                            try:
+                                os.remove(temp_dl)
+                            except OSError:
+                                pass
+        except Exception as e:
+            logger.warning("Error in prepare_preview_photo: %s", e)
+        finally:
+            if os.path.exists(temp_dl):
+                try:
+                    os.remove(temp_dl)
+                except OSError:
+                    pass
+
+        return False
+
+    @classmethod
+    async def download_full_thumbnail_file(
+        cls,
+        info: Optional[Dict[str, Any]],
+        source_id: str,
+        output_path: str,
+        timeout: float = 8.0,
+        is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
+    ) -> Optional[Tuple[str, int, int]]:
+        """
+        Downloads the highest-quality original YouTube thumbnail without downscaling or extra lossy compression.
+        Iterates candidate URLs to bypass 404s and returns (file_path, width, height) if successful, None otherwise.
+        If is_vertical is True and the downloaded image is 16:9 landscape with pillarboxes, crops to target vertical ratio.
+        Automatically detects and crops injected black pillarbox/letterbox borders from YouTube.
+        If the original image is WebP or cropped, it converts to high-quality JPEG (quality=98) so all devices can open it natively.
+        """
+        candidates = cls.get_candidate_thumbnail_urls(info, source_id)
+        if not candidates:
+            return None
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        temp_dl = output_path + ".full.tmp"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=4.0),
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            ) as client:
+                for idx, url in enumerate(candidates[:15]):
+                    try:
+                        dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
+                        if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
+                            with Image.open(temp_dl) as img:
                                 orig_format = (img.format or "").upper()
+                                orig_size = img.size
                                 rgb_img = img.convert("RGB")
 
                                 if is_vertical and rgb_img.width > rgb_img.height:
                                     ratio = target_ratio or (9 / 16)
                                     rgb_img = cls.crop_vertical_pillarbox(rgb_img, target_ratio=ratio)
+                                rgb_img = cls.auto_crop_black_borders(rgb_img)
+
+                                # If cropping occurred or not a JPEG, save pristine RGB JPEG
+                                if rgb_img.size != orig_size or orig_format not in ("JPEG", "JPG") or not output_path.lower().endswith((".jpg", ".jpeg")):
                                     rgb_img.save(output_path, "JPEG", quality=98, subsampling=0)
                                     final_w, final_h = rgb_img.size
                                 else:
-                                    # If already JPEG, not vertical crop, and extension matches, copy file directly
-                                    if orig_format in ("JPEG", "JPG") and output_path.lower().endswith((".jpg", ".jpeg")):
-                                        shutil.copy2(temp_dl, output_path)
-                                        final_w, final_h = img.size
-                                    else:
-                                        # Convert to high-quality RGB JPEG (quality=98, 4:4:4 subsampling)
-                                        rgb_img.save(output_path, "JPEG", quality=98, subsampling=0)
-                                        final_w, final_h = rgb_img.size
+                                    # Copy original file bit-for-bit
+                                    shutil.copy2(temp_dl, output_path)
+                                    final_w, final_h = orig_size
 
                                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                                     logger.info(

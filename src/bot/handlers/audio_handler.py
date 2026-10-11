@@ -121,13 +121,18 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
 
             status_msg = await callback.message.answer(
                 f"⏳ <b>Attached to existing job</b>\n"
-                f"🎵 <b>MP3 Audio</b>\n"
+                f"💿 <b>MP3 Audio</b>\n"
                 f"Position: {pos_str}\n"
                 f"Active jobs: {active_count} / {limit}",
                 reply_markup=build_queue_status_keyboard(existing_job.id),
             )
             req.status_message_id = status_msg.message_id
             await session.commit()
+            try:
+                r = get_redis_client()
+                await r.set(f"job_request:status_msg:{existing_job.id}:{user_id}", str(status_msg.message_id), ex=86400)
+            except Exception as r_err:
+                logger.debug("Failed saving status_msg_id to redis: %s", r_err)
             await safe_callback_answer(callback, "Added to queue!")
             return
 
@@ -172,12 +177,17 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
 
         status_msg = await callback.message.answer(
             f"⏳ <b>Added to queue</b>\n"
-            f"🎵 <b>MP3 Audio</b>\n"
+            f"💿 <b>MP3 Audio</b>\n"
             f"Position: #{position}\n"
             f"Active: {active_count} / {limit}",
             reply_markup=build_queue_status_keyboard(job_id),
         )
         req.status_message_id = status_msg.message_id
         await session.commit()
+        try:
+            r = get_redis_client()
+            await r.set(f"job_request:status_msg:{job_id}:{user_id}", str(status_msg.message_id), ex=86400)
+        except Exception as r_err:
+            logger.debug("Failed saving status_msg_id to redis: %s", r_err)
 
     await safe_callback_answer(callback, "Added to queue!")

@@ -795,6 +795,33 @@ def test_b15ftNfMjK8_selects_sddefault_over_tiny_tokenized_urls():
     assert sd_idx < tiny_idx
 
 
+def test_auto_crop_black_borders_pillarbox():
+    # 1280x720 canvas with 160px black pillarbox on left and right, inner 960x720 red
+    img = Image.new("RGB", (1280, 720), (0, 0, 0))
+    inner = Image.new("RGB", (960, 720), (220, 50, 50))
+    img.paste(inner, (160, 0))
+
+    cropped = ThumbnailService.auto_crop_black_borders(img)
+    assert cropped.size == (960, 720)
+
+
+def test_auto_crop_black_borders_letterbox():
+    # 640x480 canvas with 60px black letterbox on top and bottom, inner 640x360 blue
+    img = Image.new("RGB", (640, 480), (0, 0, 0))
+    inner = Image.new("RGB", (640, 360), (50, 50, 220))
+    img.paste(inner, (0, 60))
+
+    cropped = ThumbnailService.auto_crop_black_borders(img)
+    assert cropped.size == (640, 360)
+
+
+def test_auto_crop_black_borders_clean_image_untouched():
+    # Fully painted image with no black borders
+    img = Image.new("RGB", (1280, 720), (100, 150, 200))
+    cropped = ThumbnailService.auto_crop_black_borders(img)
+    assert cropped.size == (1280, 720)
+
+
 
 
 

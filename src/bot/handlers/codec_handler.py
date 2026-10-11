@@ -280,6 +280,11 @@ async def enqueue_video_job(
             )
             req.status_message_id = status_msg.message_id
             await session.commit()
+            try:
+                r = get_redis_client()
+                await r.set(f"job_request:status_msg:{existing_job.id}:{user_id}", str(status_msg.message_id), ex=86400)
+            except Exception as r_err:
+                logger.debug("Failed saving status_msg_id to redis: %s", r_err)
             await safe_callback_answer(callback, "Added to queue!")
             return
 
@@ -332,5 +337,10 @@ async def enqueue_video_job(
         )
         req.status_message_id = status_msg.message_id
         await session.commit()
+        try:
+            r = get_redis_client()
+            await r.set(f"job_request:status_msg:{job_id}:{user_id}", str(status_msg.message_id), ex=86400)
+        except Exception as r_err:
+            logger.debug("Failed saving status_msg_id to redis: %s", r_err)
 
     await safe_callback_answer(callback, "Added to queue!")

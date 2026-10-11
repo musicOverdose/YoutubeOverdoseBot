@@ -1036,14 +1036,24 @@ class JobProcessor:
                             req.delivered_at = datetime.now(timezone.utc)
                             await session.commit()
 
-                            if req.status_message_id:
+                            status_msg_id = getattr(req, "status_message_id", None)
+                            if not status_msg_id:
+                                try:
+                                    r = get_redis_client()
+                                    val = await r.get(f"job_request:status_msg:{job_id}:{req.user_id}")
+                                    if val:
+                                        status_msg_id = int(val)
+                                except Exception:
+                                    pass
+
+                            if status_msg_id:
                                 try:
                                     await bot.delete_message(
                                         chat_id=req.chat_id,
-                                        message_id=req.status_message_id,
+                                        message_id=int(status_msg_id),
                                     )
                                 except Exception as del_stat_err:
-                                    logger.debug("Could not delete queue status message %s for user %s: %s", req.status_message_id, req.user_id, del_stat_err)
+                                    logger.debug("Could not delete queue status message %s for user %s: %s", status_msg_id, req.user_id, del_stat_err)
 
                             # Delete keyboard message after sending video / delivering media
                             menu_msg_id = getattr(req, "menu_message_id", None)

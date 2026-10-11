@@ -132,6 +132,8 @@ async def test_on_show_description_expandable_blockquote():
         assert "<blockquote expandable>" in kwargs["text"]
         assert "&lt;lyrics&gt; &amp; track info!" in kwargs["text"]
         assert "</blockquote>" in kwargs["text"]
+        assert kwargs.get("link_preview_options") is not None
+        assert kwargs["link_preview_options"].is_disabled is True
 
 
 @pytest.mark.asyncio

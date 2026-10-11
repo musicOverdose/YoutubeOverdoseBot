@@ -2,7 +2,7 @@ import html
 import os
 import uuid
 from aiogram import Bot, Router
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, LinkPreviewOptions
 from src.bot.handlers.codec_handler import enqueue_video_job, safe_callback_answer
 from src.bot.keyboards import build_must_join_keyboard, build_quality_keyboard
 from src.core.config import settings
@@ -221,7 +221,7 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
         info = None
 
     raw_description = (info.get("description") if info else "") or ""
-    description = YtDlpService.clean_video_description(raw_description)
+    description = raw_description.strip()
 
     if not description:
         await bot.send_message(
@@ -231,6 +231,7 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
         return
 
     escaped = html.escape(description)
+    no_preview = LinkPreviewOptions(is_disabled=True)
 
     # Chunking: Telegram max message length is 4096 chars.
     MAX_CHUNK_LEN = 3800
@@ -238,6 +239,7 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
         await bot.send_message(
             chat_id=chat_id,
             text=f"<blockquote expandable>{escaped}</blockquote>",
+            link_preview_options=no_preview,
         )
         return
 
@@ -266,10 +268,12 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"<blockquote expandable>{sub_chunk}</blockquote>",
+                    link_preview_options=no_preview,
                 )
         else:
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"<blockquote expandable>{chunk}</blockquote>",
+                link_preview_options=no_preview,
             )
 

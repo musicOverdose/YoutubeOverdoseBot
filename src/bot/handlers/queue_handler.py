@@ -50,8 +50,16 @@ async def on_queue_status(callback: CallbackQuery, bot: Bot):
             f"<b>Current stage:</b> {job.status}"
         )
 
-        await callback.answer()
-        await callback.message.answer(status_text)
+        alert_text = (
+            f"📊 Queue Status: {job.status}\n\n"
+            f"Position: {pos_str}\n"
+            f"Active: {len(active_ids)} / {queue_limit}\n"
+            f"In queue: {len(queued_ids)}"
+        )
+        try:
+            await callback.answer(alert_text, show_alert=True)
+        except Exception:
+            await callback.answer()
 
 
 @queue_router.callback_query(lambda c: c.data and c.data.startswith("q_cancel:"))
