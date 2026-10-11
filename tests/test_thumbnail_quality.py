@@ -675,4 +675,38 @@ async def test_prepend_thumbnail_intro_zero_reencode(tmp_path):
         assert b > 200 and r < 50 and g < 50
 
 
+def test_tokenized_thumbnails_beat_bare_urls_with_higher_preference():
+    """
+    Verifies that when yt-dlp assigns arbitrary higher preference to bare URLs
+    (e.g. pref=-1 on bare maxresdefault vs pref=-39 on maxres2?sqp=...),
+    _rank_thumbnails correctly prioritizes the live tokenized URL over the stale bare URL.
+    """
+    metadata = {
+        "id": "Qpi_xEujan0",
+        "thumbnail": "https://i.ytimg.com/vi/Qpi_xEujan0/hq720_2.jpg?sqp=token_720&rs=token_rs",
+        "thumbnails": [
+            {
+                "id": "43",
+                "url": "https://i.ytimg.com/vi/Qpi_xEujan0/maxresdefault.jpg",
+                "width": None,
+                "height": None,
+                "preference": -1,
+            },
+            {
+                "id": "0",
+                "url": "https://i.ytimg.com/vi/Qpi_xEujan0/maxres2.jpg?sqp=token_1080&rs=token_rs",
+                "width": 1920,
+                "height": 1080,
+                "preference": -39,
+            },
+        ],
+    }
+    ranked = ThumbnailService._rank_thumbnails(metadata)
+    assert len(ranked) >= 2
+    # The live tokenized thumbnail must be ranked at index 0 despite lower yt-dlp preference!
+    assert "sqp=token_1080" in ranked[0]["url"]
+    assert ranked[0]["url"] == "https://i.ytimg.com/vi/Qpi_xEujan0/maxres2.jpg?sqp=token_1080&rs=token_rs"
+
+
+
 

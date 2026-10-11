@@ -99,11 +99,11 @@ class FFmpegService:
         output_path: str,
         thumbnail_image_path: str,
         cover_image_path: Optional[str] = None,
-        duration_sec: float = 0.1,
+        duration_sec: float = 0.2,
         cancellation_event: Optional[asyncio.Event] = None,
     ) -> bool:
         """
-        Prepends a brief (default 0.1s) intro clip generated from thumbnail_image_path
+        Prepends a brief (default 0.2s) intro clip generated from thumbnail_image_path
         to the video stream using FFmpeg concat demuxer with -c copy.
         ZERO VIDEO RE-ENCODING: The main video stream is copied directly without re-encoding.
         This guarantees that Telegram's server-side thumbnail extraction extracts the
@@ -183,9 +183,69 @@ class FFmpegService:
                 "-c:v", encoder,
                 "-pix_fmt", pix_fmt,
                 "-r", r_fps,
-                "-vf", f"scale={width}:{height}",
-                intro_file,
+                "-crf", "10",
+                "-preset", "slow",
             ])
+            if encoder == "libx264":
+                cmd_intro.extend(["-tune", "stillimage"])
+
+            # Color range & color matrix matching to avoid washed-out contrast or gamma shifts
+            color_range = v_stream.get("color_range")
+            color_space = v_stream.get("color_space")
+            color_transfer = v_stream.get("color_transfer")
+            color_primaries = v_stream.get("color_primaries")
+
+            scale_filters = [f"scale={width}:{height}:flags=lanczos+accurate_rnd"]
+            # Ensure full-range RGB input from still image is accurately converted
+            # to the target stream's color matrix and color range
+            if color_range == "tv" or not color_range:
+                scale_filters.append("in_range=full:out_range=tv")
+            elif color_range == "pc":
+                scale_filters.append("in_range=full:out_range=full")
+
+            if color_space:
+                scale_filters.append(f"out_color_matrix={color_space}")
+            elif height >= 720:
+                scale_filters.append("out_color_matrix=bt709")
+
+            cmd_intro.extend(["-vf", ":".join(scale_filters)])
+
+            if color_range:
+                cmd_intro.extend(["-color_range", color_range])
+            elif height >= 720:
+                cmd_intro.extend(["-color_range", "tv"])
+
+            if color_space:
+                cmd_intro.extend(["-colorspace", color_space])
+            elif height >= 720:
+                cmd_intro.extend(["-colorspace", "bt709"])
+
+            if color_transfer:
+                cmd_intro.extend(["-color_trc", color_transfer])
+            elif height >= 720:
+                cmd_intro.extend(["-color_trc", "bt709"])
+
+            if color_primaries:
+                cmd_intro.extend(["-color_primaries", color_primaries])
+            elif height >= 720:
+                cmd_intro.extend(["-color_primaries", "bt709"])
+
+            if encoder == "libx264":
+                cmd_intro.extend(["-tune", "stillimage"])
+                x264_params = []
+                target_prim = color_primaries or ("bt709" if height >= 720 else None)
+                target_trc = color_transfer or ("bt709" if height >= 720 else None)
+                target_matrix = color_space or ("bt709" if height >= 720 else None)
+                if target_prim:
+                    x264_params.append(f"colorprim={target_prim}")
+                if target_trc:
+                    x264_params.append(f"transfer={target_trc}")
+                if target_matrix:
+                    x264_params.append(f"colormatrix={target_matrix}")
+                if x264_params:
+                    cmd_intro.extend(["-x264-params", ":".join(x264_params)])
+
+            cmd_intro.append(intro_file)
 
             ok_intro = await cls.run_subprocess(cmd_intro, cancellation_event)
             if not ok_intro or not os.path.exists(intro_file) or os.path.getsize(intro_file) == 0:
@@ -343,7 +403,7 @@ class FFmpegService:
                         output_path=output_path,
                         thumbnail_image_path=cover_image_path,
                         cover_image_path=cover_image_path,
-                        duration_sec=0.1,
+                        duration_sec=0.2,
                         cancellation_event=cancellation_event,
                     )
                     if prepended and os.path.exists(output_path) and os.path.getsize(output_path) > 0:

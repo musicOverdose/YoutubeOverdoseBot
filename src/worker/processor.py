@@ -620,6 +620,19 @@ class JobProcessor:
                     )
                     raw_cover_path = thumb_files[0] if thumb_files else None
                     cover_jpg_path = os.path.join(job_dir, "cover.jpg")
+                    if not raw_cover_path or not os.path.exists(raw_cover_path):
+                        raw_dl = os.path.join(job_dir, "raw_audio_cover.jpg")
+                        try:
+                            res = await ThumbnailService.download_full_thumbnail_file(
+                                info=meta_info,
+                                source_id=job.source_id,
+                                output_path=raw_dl,
+                            )
+                            if res and os.path.exists(raw_dl):
+                                raw_cover_path = raw_dl
+                        except Exception as ce:
+                            logger.debug("Could not pre-download cover artwork for audio: %s", ce)
+
                     FFmpegService.prepare_cover_image(raw_cover_path, cover_jpg_path)
 
                     job.status = JobStatus.PROCESSING.value

@@ -39,19 +39,24 @@ class ThumbnailService:
 
         thumbnails = info.get("thumbnails")
         if not thumbnails or not isinstance(thumbnails, list):
-            return []
+            thumbnails = []
 
         valid_thumbs = [t for t in thumbnails if isinstance(t, dict) and t.get("url")]
+        main_thumb = info.get("thumbnail")
+        if main_thumb and not any(t.get("url") == main_thumb for t in valid_thumbs):
+            valid_thumbs.append({"url": main_thumb, "id": "main_thumb"})
 
-        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int]:
+        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int, int]:
             url = str(t.get("url") or "")
-            pref = t.get("preference") if t.get("preference") is not None else 0
             w = t.get("width") or 0
             h = t.get("height") or 0
             area = w * h
 
             url_lower = url.lower()
             id_lower = str(t.get("id") or "").lower()
+
+            # Active security & versioning tokens (?sqp=... &rs=...) indicate authoritative, live thumbnails from YouTube API!
+            has_token = 1 if ("sqp=" in url or "rs=" in url) else 0
 
             name_bonus = 0
             if "maxres" in url_lower or "maxres" in id_lower:
@@ -67,8 +72,9 @@ class ThumbnailService:
 
             effective_area = max(area, name_bonus)
             is_jpeg = 1 if (".jpg" in url_lower or ".jpeg" in url_lower) else 0
+            pref = t.get("preference") if t.get("preference") is not None else 0
 
-            return (effective_area, is_jpeg, pref)
+            return (has_token, effective_area, is_jpeg, pref)
 
         return sorted(valid_thumbs, key=_thumb_score, reverse=True)
 
@@ -661,25 +667,7 @@ class ThumbnailService:
         3. Falls back to local thumbnail if candidate URLs are unreachable.
         4. Falls back to native-resolution FFmpeg frame extraction only if no official artwork exists.
         """
-        # Step 1: Check if local thumbnail exists and whether it meets HD resolution
-        local_is_hd = False
-        if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
-            try:
-                with Image.open(source_thumb_path) as img:
-                    w, h = img.size
-                    if max(w, h) >= 1280 or (is_vertical and min(w, h) >= 720):
-                        local_is_hd = True
-            except Exception as e:
-                logger.debug("Could not inspect local thumbnail dimensions: %s", e)
-
-        if local_is_hd:
-            logger.info("Preparing thumbnail using local HD official YouTube artwork: %s", source_thumb_path)
-            ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical, target_ratio=target_ratio)
-            if ok:
-                return True
-            logger.warning("Failed processing local HD thumbnail; checking candidate URLs")
-
-        # Step 2: Build candidate URLs (high-res official artwork)
+        # Step 1: Try candidate high-res URLs first (authoritative live creator artwork with security tokens)
         candidate_urls: List[str] = []
         if source_thumb_urls:
             candidate_urls.extend(source_thumb_urls)
@@ -704,13 +692,13 @@ class ThumbnailService:
                     except OSError:
                         pass
 
-        # Step 3: Fallback to local thumbnail if candidate URLs failed (even if lower resolution)
+        # Step 2: Fallback to local thumbnail if candidate URLs failed or none provided
         if source_thumb_path and os.path.exists(source_thumb_path) and os.path.getsize(source_thumb_path) > 0:
-            logger.info("Candidate URLs unreachable; falling back to local thumbnail: %s", source_thumb_path)
+            logger.info("Candidate URLs unreachable or omitted; falling back to local thumbnail: %s", source_thumb_path)
             ok = cls.process_image_file(source_thumb_path, output_thumb_path, is_vertical=is_vertical, target_ratio=target_ratio)
             if ok:
                 return True
 
-        # Step 4: Fallback native-resolution frame extraction via FFmpeg
+        # Step 3: Fallback native-resolution frame extraction via FFmpeg
         logger.info("No usable official YouTube thumbnail found. Falling back to FFmpeg frame extraction.")
         return await cls.extract_frame_fallback(video_path, output_thumb_path, duration)
