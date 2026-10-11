@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 import pytest
@@ -820,6 +821,47 @@ def test_auto_crop_black_borders_clean_image_untouched():
     img = Image.new("RGB", (1280, 720), (100, 150, 200))
     cropped = ThumbnailService.auto_crop_black_borders(img)
     assert cropped.size == (1280, 720)
+
+
+@pytest.mark.asyncio
+async def test_prepare_preview_photo_crops_black_borders(tmp_path):
+    """
+    Verifies that prepare_preview_photo (used for sending the keyboard message's thumbnail image)
+    auto-crops black pillarboxes/letterboxes instead of sending uncropped black bars.
+    """
+    out_preview = str(tmp_path / "keyboard_preview.jpg")
+
+    # Create dummy 1280x720 image with 160px black pillarbox on sides (4:3 artwork)
+    pillarboxed_img = Image.new("RGB", (1280, 720), (0, 0, 0))
+    inner = Image.new("RGB", (960, 720), (220, 50, 50))
+    pillarboxed_img.paste(inner, (160, 0))
+    img_bytes_io = io.BytesIO()
+    pillarboxed_img.save(img_bytes_io, format="JPEG", quality=95)
+    img_bytes = img_bytes_io.getvalue()
+
+    with patch.object(ThumbnailService, "download_thumbnail_image", new_callable=AsyncMock) as mock_dl:
+        async def _fake_dl(url, path, client=None):
+            with open(path, "wb") as f:
+                f.write(img_bytes)
+            return True
+
+        mock_dl.side_effect = _fake_dl
+
+        ok = await ThumbnailService.prepare_preview_photo(
+            info={"id": "O2jkV4BsN6U", "thumbnails": [{"url": "https://i.ytimg.com/vi/O2jkV4BsN6U/maxresdefault.jpg", "width": 1280, "height": 720}]},
+            source_id="O2jkV4BsN6U",
+            output_path=out_preview,
+            is_vertical=False,
+        )
+
+        assert ok is True
+        assert os.path.exists(out_preview)
+
+        with Image.open(out_preview) as res:
+            # Must be cropped from 1280x720 (16:9) to ~960x720 (4:3)
+            assert abs(res.size[0] - 960) <= 2
+            assert res.size[1] == 720
+
 
 
 

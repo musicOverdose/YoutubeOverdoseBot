@@ -505,6 +505,7 @@ class ThumbnailService:
                 img = img.convert("RGB")
                 if img.width > img.height:
                     img = cls.crop_vertical_pillarbox(img)
+                img = cls.auto_crop_black_borders(img)
                 img.save(output_preview_path, "JPEG", quality=92, optimize=True)
                 return os.path.exists(output_preview_path) and os.path.getsize(output_preview_path) > 0
         except Exception as e:
@@ -530,7 +531,8 @@ class ThumbnailService:
         Prepares a crisp, compliant JPEG preview photo for Telegram inline menus.
         Iterates through candidate thumbnail URLs in descending quality order,
         automatically skipping 404 speculative URLs (common on older or low-res videos),
-        crops pillarboxes for vertical Shorts, and saves as JPEG to output_path.
+        crops pillarboxes for vertical Shorts, auto-crops black pillarboxes/letterboxes,
+        and saves as JPEG to output_path.
         """
         candidates = cls.get_candidate_thumbnail_urls(info, source_id)
         if not candidates:
@@ -554,77 +556,6 @@ class ThumbnailService:
                                 if is_vertical and img.width > img.height:
                                     img = cls.crop_vertical_pillarbox(img)
 
-                                target_w, target_h = cls.fit_dimensions_inside_bounds(
-                                    img.width, img.height, cls.MAX_DIMENSION, cls.MAX_DIMENSION
-                                )
-                                if (img.width, img.height) != (target_w, target_h):
-                                    img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
-                                    img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
-
-                                ok = cls.save_image_adaptive_jpeg(img, output_path, cls.MAX_FILE_BYTES)
-                                if ok and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                                    logger.info(
-                                        "Prepared preview photo from candidate [%d] %s (%dx%d, %d bytes)",
-                                        idx, url, target_w, target_h, os.path.getsize(output_path),
-                                    )
-                                    return True
-                    except Exception as cand_err:
-                        logger.debug("Candidate preview thumbnail failed (%s): %s", url, cand_err)
-                        continue
-                    finally:
-                        if os.path.exists(temp_dl):
-                            try:
-                                os.remove(temp_dl)
-                            except OSError:
-                                pass
-        except Exception as e:
-            logger.warning("Error in prepare_preview_photo: %s", e)
-        finally:
-            if os.path.exists(temp_dl):
-                try:
-                    os.remove(temp_dl)
-                except OSError:
-                    pass
-
-        return False
-
-    @classmethod
-    async def download_full_thumbnail_file(
-        cls,
-        info: Optional[Dict[str, Any]],
-        source_id: str,
-        output_path: str,
-        timeout: float = 8.0,
-        is_vertical: bool = False,
-        target_ratio: Optional[float] = None,
-    ) -> Optional[Tuple[str, int, int]]:
-        """
-        Downloads the highest-quality original YouTube thumbnail without downscaling or extra lossy compression.
-        Iterates candidate URLs to bypass 404s and returns (file_path, width, height) if successful, None otherwise.
-        If is_vertical is True and the downloaded image is 16:9 landscape with pillarboxes, crops to target vertical ratio.
-        If the original image is WebP, it converts to high-quality JPEG (quality=98) so all devices can open it natively.
-        """
-        candidates = cls.get_candidate_thumbnail_urls(info, source_id)
-        if not candidates:
-            return None
-
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        temp_dl = output_path + ".full.tmp"
-
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout, connect=4.0),
-                follow_redirects=True,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-            ) as client:
-                for idx, url in enumerate(candidates[:15]):
-                    try:
-                        dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
-                        if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
-                            with Image.open(temp_dl) as img:
-                                img = img.convert("RGB")
-                                if is_vertical and img.width > img.height:
-                                    img = cls.crop_vertical_pillarbox(img)
                                 img = cls.auto_crop_black_borders(img)
 
                                 target_w, target_h = cls.fit_dimensions_inside_bounds(
