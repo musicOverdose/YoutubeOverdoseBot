@@ -98,6 +98,7 @@ class FFmpegService:
         target_codec: str,  # "H264" or "H265"
         target_height: int,
         cancellation_event: Optional[asyncio.Event] = None,
+        cover_image_path: Optional[str] = None,
     ) -> bool:
         """
         Remuxes video to exact output format (MP4 with target_codec + AAC).
@@ -106,6 +107,7 @@ class FFmpegService:
         NEVER re-encodes video under any circumstances.
         If the source video stream does not match target_codec, fails immediately.
         Audio is stream-copied when already AAC; otherwise remuxed to AAC.
+        If cover_image_path is provided, attaches full-res artwork as an attached_pic video stream.
         """
         probe_data = await cls.probe_file(input_path)
         can_copy_v, can_copy_a = cls.can_stream_copy(probe_data, target_codec)
@@ -125,28 +127,68 @@ class FFmpegService:
                 f"Video re-encoding is disabled."
             )
 
+        streams = probe_data.get("streams", [])
+        has_audio = any(s.get("codec_type") == "audio" for s in streams)
+
+        has_cover = bool(
+            cover_image_path
+            and os.path.exists(cover_image_path)
+            and os.path.getsize(cover_image_path) > 0
+        )
+
         logger.info(
-            "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for %s -> %s (codec=%s, height=%d)",
+            "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for %s -> %s (codec=%s, height=%d, cover=%s)",
             input_path,
             output_path,
             target_codec,
             target_height,
+            has_cover,
         )
 
-        cmd = ["ffmpeg", "-y", "-i", input_path]
+        if has_cover:
+            cmd_cover = [
+                "ffmpeg", "-y",
+                "-i", input_path,
+                "-i", cover_image_path,
+                "-map", "0:v:0",
+                "-c:v:0", "copy",
+            ]
+            if has_audio:
+                cmd_cover.extend(["-map", "0:a:0"])
+                if can_copy_a:
+                    cmd_cover.extend(["-c:a", "copy"])
+                else:
+                    cmd_cover.extend(["-c:a", "aac", "-b:a", "192k"])
 
-        # Video: STRICT STREAM-COPY ONLY (NEVER RE-ENCODE)
+            cmd_cover.extend([
+                "-map", "1:0",
+                "-c:v:1", "copy",
+                "-disposition:v:1", "attached_pic",
+                "-movflags", "+faststart",
+                output_path,
+            ])
+
+            try:
+                ok = await cls.run_subprocess(cmd_cover, cancellation_event)
+                if ok and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    logger.info("Successfully remuxed video with native attached_pic cover art: %s", output_path)
+                    return True
+                logger.warning("Remuxing with attached_pic cover failed; falling back to clean remux without cover")
+            except Exception as cover_err:
+                logger.warning("Error embedding cover art: %s; falling back to clean remux without cover", cover_err)
+
+        # Standard remuxing without cover art (or fallback)
+        cmd = ["ffmpeg", "-y", "-i", input_path]
         cmd.extend(["-c:v", "copy"])
 
-        # Audio: stream copy if already AAC, otherwise audio-only transcode to AAC (fast, lightweight)
-        if can_copy_a:
-            logger.info("Stream-copying audio for %s (already AAC)", input_path)
-            cmd.extend(["-c:a", "copy"])
-        else:
-            logger.info("Remuxing audio to AAC for %s", input_path)
-            cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        if has_audio:
+            if can_copy_a:
+                logger.info("Stream-copying audio for %s (already AAC)", input_path)
+                cmd.extend(["-c:a", "copy"])
+            else:
+                logger.info("Remuxing audio to AAC for %s", input_path)
+                cmd.extend(["-c:a", "aac", "-b:a", "192k"])
 
-        # Movflags for fast streaming start
         cmd.extend(["-movflags", "+faststart", output_path])
 
         return await cls.run_subprocess(cmd, cancellation_event)

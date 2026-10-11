@@ -165,6 +165,58 @@ async def test_zero_reencoding_enforced_on_mismatched_codec(tmp_path):
         )
 
 
+@pytest.mark.asyncio
+async def test_process_video_embeds_attached_pic_cover_art(tmp_path):
+    """
+    Verifies that FFmpegService.process_video embeds an attached_pic cover stream
+    into the MP4 container with zero video re-encoding when cover_image_path is provided.
+    """
+    import subprocess
+    from PIL import Image
+
+    in_file = str(tmp_path / "in_h264.mp4")
+    cover_file = str(tmp_path / "cover.jpg")
+    out_file = str(tmp_path / "out_with_cover.mp4")
+
+    # Generate synthetic H264 video with AAC audio
+    cmd_gen = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+        "-t", "1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        in_file
+    ]
+    proc = subprocess.run(cmd_gen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.returncode == 0
+
+    # Create synthetic full-res cover image
+    Image.new("RGB", (1280, 720), color=(255, 50, 100)).save(cover_file, "JPEG")
+
+    ok = await FFmpegService.process_video(
+        input_path=in_file,
+        output_path=out_file,
+        target_codec="H264",
+        target_height=360,
+        cover_image_path=cover_file,
+    )
+    assert ok is True
+    assert os.path.exists(out_file)
+
+    # Probe streams in output file
+    probe = await FFmpegService.probe_file(out_file)
+    streams = probe.get("streams", [])
+    v_streams = [s for s in streams if s.get("codec_type") == "video"]
+    assert len(v_streams) == 2, f"Expected main video and attached_pic video, got {len(v_streams)}"
+
+    # Check that second video stream has attached_pic disposition
+    attached_stream = v_streams[1]
+    disp = attached_stream.get("disposition", {})
+    assert disp.get("attached_pic") == 1
+    assert attached_stream.get("codec_name") == "mjpeg"
+
+
 def test_get_available_codecs_for_height():
     info = {
         "formats": [

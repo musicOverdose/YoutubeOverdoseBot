@@ -512,3 +512,47 @@ async def test_download_full_thumbnail_file(tmp_path):
         assert (w, h) == (1920, 1080)
         assert os.path.exists(out_full)
 
+
+def test_create_telegram_chat_thumbnail_fits_320_bounds(tmp_path):
+    """
+    Verifies that create_telegram_chat_thumbnail scales down a large 1080p image
+    to fit strictly inside 320x320 while preserving aspect ratio, applying unsharp mask,
+    and outputting a compliant JPEG.
+    """
+    src_img = tmp_path / "art_1080p.jpg"
+    out_320 = str(tmp_path / "tg_thumb_320.jpg")
+    Image.new("RGB", (1920, 1080), color=(100, 200, 150)).save(str(src_img), "JPEG")
+
+    ok = ThumbnailService.create_telegram_chat_thumbnail(
+        source_image_path=str(src_img),
+        output_thumb_path=out_320,
+    )
+    assert ok is True
+    assert os.path.exists(out_320)
+    with Image.open(out_320) as img:
+        assert img.format == "JPEG"
+        assert img.width <= 320 and img.height <= 320
+        assert img.size == (320, 180)
+
+
+def test_create_telegram_chat_thumbnail_vertical_shorts(tmp_path):
+    """
+    Verifies vertical Shorts are cropped and scaled to fit within 320x320 (e.g. 180x320).
+    """
+    src_img = tmp_path / "short_horizontal.jpg"
+    out_320 = str(tmp_path / "tg_thumb_short.jpg")
+    Image.new("RGB", (1280, 720), color=(150, 100, 200)).save(str(src_img), "JPEG")
+
+    ok = ThumbnailService.create_telegram_chat_thumbnail(
+        source_image_path=str(src_img),
+        output_thumb_path=out_320,
+        is_vertical=True,
+    )
+    assert ok is True
+    assert os.path.exists(out_320)
+    with Image.open(out_320) as img:
+        assert img.format == "JPEG"
+        assert img.width <= 320 and img.height <= 320
+        assert img.width < img.height
+
+

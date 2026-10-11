@@ -290,6 +290,51 @@ class ThumbnailService:
             return False
 
     @classmethod
+    def create_telegram_chat_thumbnail(
+        cls,
+        source_image_path: str,
+        output_thumb_path: str,
+        is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
+    ) -> bool:
+        """
+        Creates a crisp 320x320-bounded JPEG specifically optimized for Telegram's
+        video message chat bubble. Uses Lanczos downsampling and subtle unsharp masking
+        to prevent Telegram's server-side bilinear downscaler from blurring edges.
+        """
+        if not os.path.exists(source_image_path) or os.path.getsize(source_image_path) == 0:
+            return False
+
+        try:
+            with Image.open(source_image_path) as img:
+                img = img.convert("RGB")
+                if is_vertical and img.width > img.height:
+                    ratio = target_ratio or (9 / 16)
+                    img = cls.crop_vertical_pillarbox(img, target_ratio=ratio)
+
+                src_w, src_h = img.size
+                target_w, target_h = cls.fit_dimensions_inside_bounds(
+                    src_w, src_h, 320, 320
+                )
+
+                if (src_w, src_h) != (target_w, target_h):
+                    img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                    # Apply gentle micro-contrast unsharp mask to keep text and logo edges razor-sharp at 320px
+                    img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=50, threshold=2))
+
+                ok = cls.save_image_adaptive_jpeg(img, output_thumb_path, cls.MAX_FILE_BYTES)
+                if ok and os.path.exists(output_thumb_path):
+                    logger.info(
+                        "Created Telegram chat thumbnail (320px): size=(%d, %d), bytes=%d",
+                        target_w, target_h, os.path.getsize(output_thumb_path)
+                    )
+                    return True
+                return False
+        except Exception as e:
+            logger.warning("Error creating Telegram chat thumbnail %s: %s", source_image_path, e)
+            return False
+
+    @classmethod
     async def create_vertical_preview_photo(
         cls,
         thumbnail_url: str,

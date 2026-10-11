@@ -398,6 +398,38 @@ class JobProcessor:
                     input_file = input_video_files[0]
                     found_thumb_file = input_thumb_files[0] if input_thumb_files else None
 
+                    # 1. Look up highest-quality YouTube thumbnail URLs & pre-download cover artwork
+                    candidate_thumb_urls = []
+                    meta_info = None
+                    try:
+                        meta_info = await YtDlpService.extract_metadata(job.canonical_url, use_cache=True)
+                        candidate_thumb_urls = ThumbnailService.get_candidate_thumbnail_urls(
+                            meta_info, source_id=job.source_id
+                        )
+                    except Exception as meta_e:
+                        logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
+
+                    raw_cover_path = os.path.join(job_dir, "cover.jpg")
+                    cover_downloaded = False
+                    try:
+                        res = await ThumbnailService.download_full_thumbnail_file(
+                            info=meta_info,
+                            source_id=job.source_id,
+                            output_path=raw_cover_path,
+                        )
+                        if res and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                            cover_downloaded = True
+                    except Exception as ce:
+                        logger.debug("Could not pre-download cover artwork for video: %s", ce)
+
+                    if not cover_downloaded and found_thumb_file and os.path.exists(found_thumb_file):
+                        try:
+                            ok_conv = ThumbnailService.process_image_file(found_thumb_file, raw_cover_path)
+                            if ok_conv and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                                cover_downloaded = True
+                        except Exception as fe:
+                            logger.debug("Could not convert found_thumb_file to cover: %s", fe)
+
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
                     await notifier.update("🔧", "Remuxing (stream copy)...", f"Muxing {target_codec} source into MP4 container...", force=True)
@@ -408,11 +440,12 @@ class JobProcessor:
                         output_path=output_file,
                         target_codec=target_codec,
                         target_height=target_height,
+                        cover_image_path=raw_cover_path if cover_downloaded else None,
                     )
                     if not process_ok or not os.path.exists(output_file):
                         raise RuntimeError("FFmpeg processing failed")
 
-                    # 1. Run ffprobe against FINAL output file
+                    # 2. Run ffprobe against FINAL output file
                     # Must fail cleanly with clear error if metadata cannot be determined
                     try:
                         duration, width, height = await FFmpegService.extract_video_metadata(output_file)
@@ -425,35 +458,35 @@ class JobProcessor:
                         logger.error("Failed to extract valid video metadata from final file: %s", meta_err)
                         raise ValueError(f"Could not extract valid video metadata: {meta_err}") from meta_err
 
-                    # 2. Look up highest-quality YouTube thumbnail URLs (always extracted to ensure HD artwork even on low-res downloads)
-                    candidate_thumb_urls = []
-                    try:
-                        meta_info = await YtDlpService.extract_metadata(job.canonical_url, use_cache=True)
-                        candidate_thumb_urls = ThumbnailService.get_candidate_thumbnail_urls(
-                            meta_info, source_id=job.source_id
-                        )
-                    except Exception as meta_e:
-                        logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
-
-                    # 3. Generate high-fidelity JPEG thumbnail (official artwork cropped to exact aspect ratio for shorts, or landscape)
+                    # 3. Generate high-fidelity JPEG thumbnail for Telegram chat bubble (320px Lanczos + sharpened)
                     thumb_desc = "Processing official vertical cover..." if is_vertical else "Processing official creator artwork..."
                     await notifier.update("🖼️", "Preparing thumbnail...", thumb_desc, force=True)
                     thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                     thumb_ok = False
                     target_ratio = (width / float(height)) if is_vertical and height > 0 else None
-                    try:
-                        thumb_ok = await ThumbnailService.prepare_video_thumbnail(
-                            video_path=output_file,
+
+                    if cover_downloaded and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                        thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
+                            source_image_path=raw_cover_path,
                             output_thumb_path=thumb_path,
-                            source_thumb_path=found_thumb_file,
-                            source_thumb_urls=candidate_thumb_urls,
-                            duration=duration,
                             is_vertical=is_vertical,
                             target_ratio=target_ratio,
                         )
-                    except Exception as thumb_err:
-                        logger.warning("Thumbnail generation error: %s", thumb_err)
-                        thumb_ok = False
+
+                    if not thumb_ok:
+                        try:
+                            thumb_ok = await ThumbnailService.prepare_video_thumbnail(
+                                video_path=output_file,
+                                output_thumb_path=thumb_path,
+                                source_thumb_path=found_thumb_file,
+                                source_thumb_urls=candidate_thumb_urls,
+                                duration=duration,
+                                is_vertical=is_vertical,
+                                target_ratio=target_ratio,
+                            )
+                        except Exception as thumb_err:
+                            logger.warning("Thumbnail generation error: %s", thumb_err)
+                            thumb_ok = False
 
                     extra_kwargs = {
                         "supports_streaming": True,
