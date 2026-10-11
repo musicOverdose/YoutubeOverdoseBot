@@ -556,3 +556,123 @@ def test_create_telegram_chat_thumbnail_vertical_shorts(tmp_path):
         assert img.width < img.height
 
 
+def test_candidate_urls_prioritize_live_tokens_over_deterministic_bare_urls():
+    """
+    Verifies that get_candidate_thumbnail_urls prioritizes live, tokenized URLs
+    from yt-dlp metadata ahead of bare deterministic CDN URLs.
+    """
+    metadata = {
+        "id": "R9B3DfUg_8Q",
+        "thumbnail": "https://i.ytimg.com/vi/R9B3DfUg_8Q/hqdefault.jpg?sqp=live_token&rs=token2",
+        "thumbnails": [
+            {
+                "id": "maxresdefault",
+                "url": "https://i.ytimg.com/vi/R9B3DfUg_8Q/maxresdefault.jpg?sqp=live_token_hd&rs=token_hd",
+                "width": 1920,
+                "height": 1080,
+            },
+            {
+                "id": "hq720",
+                "url": "https://i.ytimg.com/vi/R9B3DfUg_8Q/hq720.jpg?sqp=live_token_720&rs=token_720",
+                "width": 1280,
+                "height": 720,
+            },
+        ],
+    }
+    candidates = ThumbnailService.get_candidate_thumbnail_urls(metadata, source_id="R9B3DfUg_8Q")
+    assert len(candidates) > 2
+    # First candidates MUST be the live tokenized ones
+    assert "sqp=live_token_hd" in candidates[0]
+    assert "sqp=live_token_720" in candidates[1]
+    # The bare URLs must appear strictly after all metadata URLs
+    bare_url = "https://i.ytimg.com/vi/R9B3DfUg_8Q/maxresdefault.jpg"
+    assert bare_url in candidates
+    assert candidates.index(bare_url) > candidates.index(candidates[0])
+
+
+@pytest.mark.asyncio
+async def test_download_full_thumbnail_file_crops_vertical_shorts(tmp_path):
+    """
+    Verifies download_full_thumbnail_file with is_vertical=True crops
+    a 16:9 pillarboxed thumbnail into 9:16 vertical orientation.
+    """
+    out_cover = str(tmp_path / "cover_vertical.jpg")
+    img_horizontal = tmp_path / "sample_16_9.jpg"
+    Image.new("RGB", (1280, 720), color=(10, 50, 100)).save(str(img_horizontal), "JPEG")
+    sample_bytes = img_horizontal.read_bytes()
+
+    async def fake_get(url):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = sample_bytes
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=fake_get):
+        res = await ThumbnailService.download_full_thumbnail_file(
+            info=None,
+            source_id="short123456",
+            output_path=out_cover,
+            is_vertical=True,
+            target_ratio=9 / 16.0,
+        )
+        assert res is not None
+        path, w, h = res
+        assert path == out_cover
+        assert w < h
+        assert abs((w / float(h)) - (9 / 16.0)) < 0.05
+        with Image.open(out_cover) as img:
+            assert img.width < img.height
+
+
+@pytest.mark.asyncio
+async def test_prepend_thumbnail_intro_zero_reencode(tmp_path):
+    """
+    Verifies FFmpegService.prepend_thumbnail_intro:
+    - Generates 0.1s intro snippet from thumbnail
+    - Concatenates with main video using stream-copy (-c copy)
+    - Sets Frame 0 to the thumbnail image
+    - Embeds attached_pic cover art stream
+    """
+    vid_in = str(tmp_path / "main.mp4")
+    thumb_in = str(tmp_path / "thumb.jpg")
+    vid_out = str(tmp_path / "out_intro.mp4")
+
+    # Generate 1s test video
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+        "-t", "1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        vid_in
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Distinctive colored thumbnail (pure blue)
+    Image.new("RGB", (320, 240), color=(0, 0, 255)).save(thumb_in, "JPEG")
+
+    ok = await FFmpegService.prepend_thumbnail_intro(
+        video_path=vid_in,
+        output_path=vid_out,
+        thumbnail_image_path=thumb_in,
+        cover_image_path=thumb_in,
+        duration_sec=0.1,
+    )
+    assert ok is True
+    assert os.path.exists(vid_out)
+
+    # Probe final output
+    probe = await FFmpegService.probe_file(vid_out)
+    v_streams = [s for s in probe.get("streams", []) if s.get("codec_type") == "video"]
+    assert len(v_streams) == 2  # main video + attached_pic
+    assert v_streams[1].get("disposition", {}).get("attached_pic") == 1
+
+    # Extract frame 0 to verify it's the thumbnail (pure blue)
+    f0_path = str(tmp_path / "frame0.jpg")
+    subprocess.run(["ffmpeg", "-y", "-i", vid_out, "-vframes", "1", f0_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with Image.open(f0_path) as img:
+        r, g, b = img.getpixel((50, 50))
+        assert b > 200 and r < 50 and g < 50
+
+
+

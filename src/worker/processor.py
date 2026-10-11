@@ -409,6 +409,21 @@ class JobProcessor:
                     except Exception as meta_e:
                         logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
 
+                    # Determine video orientation and aspect ratio early so cover image can be cropped for vertical Shorts
+                    is_vertical = False
+                    target_ratio = None
+                    try:
+                        _dur, early_w, early_h = await FFmpegService.extract_video_metadata(input_file)
+                        if early_w > 0 and early_h > 0:
+                            is_vertical = (early_h > early_w)
+                            if is_vertical:
+                                target_ratio = early_w / float(early_h)
+                    except Exception as probe_err:
+                        logger.debug("Could not probe input_file early for orientation: %s", probe_err)
+                        if "/shorts/" in (job.canonical_url or "").lower():
+                            is_vertical = True
+                            target_ratio = 9 / 16.0
+
                     raw_cover_path = os.path.join(job_dir, "cover.jpg")
                     cover_downloaded = False
                     try:
@@ -416,6 +431,8 @@ class JobProcessor:
                             info=meta_info,
                             source_id=job.source_id,
                             output_path=raw_cover_path,
+                            is_vertical=is_vertical,
+                            target_ratio=target_ratio,
                         )
                         if res and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                             cover_downloaded = True
@@ -424,7 +441,12 @@ class JobProcessor:
 
                     if not cover_downloaded and found_thumb_file and os.path.exists(found_thumb_file):
                         try:
-                            ok_conv = ThumbnailService.process_image_file(found_thumb_file, raw_cover_path)
+                            ok_conv = ThumbnailService.process_image_file(
+                                found_thumb_file,
+                                raw_cover_path,
+                                is_vertical=is_vertical,
+                                target_ratio=target_ratio,
+                            )
                             if ok_conv and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                                 cover_downloaded = True
                         except Exception as fe:
@@ -441,6 +463,7 @@ class JobProcessor:
                         target_codec=target_codec,
                         target_height=target_height,
                         cover_image_path=raw_cover_path if cover_downloaded else None,
+                        prepend_thumbnail=True,
                     )
                     if not process_ok or not os.path.exists(output_file):
                         raise RuntimeError("FFmpeg processing failed")

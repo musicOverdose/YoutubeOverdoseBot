@@ -103,8 +103,24 @@ class ThumbnailService:
         urls = []
         seen = set()
 
-        # If we have a valid YouTube source_id, prepend deterministic high-resolution endpoints
-        # These frequently exist on YouTube CDN even when yt-dlp metadata did not list them
+        # 1. Authoritative, live thumbnail URLs from yt-dlp metadata
+        # These contain active ?sqp=... and &rs=... security/versioning tokens that reflect
+        # the creator's latest thumbnail upload (and A/B testing selections)
+        if info:
+            sorted_thumbs = cls._rank_thumbnails(info)
+            for t in sorted_thumbs:
+                u = t.get("url")
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+
+            main_thumb = info.get("thumbnail")
+            if main_thumb and main_thumb not in seen:
+                seen.add(main_thumb)
+                urls.append(main_thumb)
+
+        # 2. Speculative deterministic high-resolution endpoints as fallback
+        # Used only if metadata URLs returned 404 or video info was unavailable
         if source_id and len(source_id) == 11:
             deterministic_urls = [
                 f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg",
@@ -120,19 +136,6 @@ class ThumbnailService:
                 if u not in seen:
                     seen.add(u)
                     urls.append(u)
-
-        if info:
-            sorted_thumbs = cls._rank_thumbnails(info)
-            for t in sorted_thumbs:
-                u = t.get("url")
-                if u and u not in seen:
-                    seen.add(u)
-                    urls.append(u)
-
-            main_thumb = info.get("thumbnail")
-            if main_thumb and main_thumb not in seen:
-                seen.add(main_thumb)
-                urls.append(main_thumb)
 
         return urls
 
@@ -443,10 +446,13 @@ class ThumbnailService:
         source_id: str,
         output_path: str,
         timeout: float = 8.0,
+        is_vertical: bool = False,
+        target_ratio: Optional[float] = None,
     ) -> Optional[Tuple[str, int, int]]:
         """
         Downloads the highest-quality original YouTube thumbnail without downscaling or extra lossy compression.
         Iterates candidate URLs to bypass 404s and returns (file_path, width, height) if successful, None otherwise.
+        If is_vertical is True and the downloaded image is 16:9 landscape with pillarboxes, crops to target vertical ratio.
         If the original image is WebP, it converts to high-quality JPEG (quality=98) so all devices can open it natively.
         """
         candidates = cls.get_candidate_thumbnail_urls(info, source_id)
@@ -467,23 +473,30 @@ class ThumbnailService:
                         dl_ok = await cls.download_thumbnail_image(url, temp_dl, client=client)
                         if dl_ok and os.path.exists(temp_dl) and os.path.getsize(temp_dl) > 1024:
                             with Image.open(temp_dl) as img:
-                                orig_w, orig_h = img.size
                                 orig_format = (img.format or "").upper()
+                                rgb_img = img.convert("RGB")
 
-                                # If already JPEG and extension matches, copy file directly (zero re-compression)
-                                if orig_format in ("JPEG", "JPG") and output_path.lower().endswith((".jpg", ".jpeg")):
-                                    shutil.copy2(temp_dl, output_path)
-                                else:
-                                    # Convert to high-quality RGB JPEG (quality=98, 4:4:4 subsampling)
-                                    rgb_img = img.convert("RGB")
+                                if is_vertical and rgb_img.width > rgb_img.height:
+                                    ratio = target_ratio or (9 / 16)
+                                    rgb_img = cls.crop_vertical_pillarbox(rgb_img, target_ratio=ratio)
                                     rgb_img.save(output_path, "JPEG", quality=98, subsampling=0)
+                                    final_w, final_h = rgb_img.size
+                                else:
+                                    # If already JPEG, not vertical crop, and extension matches, copy file directly
+                                    if orig_format in ("JPEG", "JPG") and output_path.lower().endswith((".jpg", ".jpeg")):
+                                        shutil.copy2(temp_dl, output_path)
+                                        final_w, final_h = img.size
+                                    else:
+                                        # Convert to high-quality RGB JPEG (quality=98, 4:4:4 subsampling)
+                                        rgb_img.save(output_path, "JPEG", quality=98, subsampling=0)
+                                        final_w, final_h = rgb_img.size
 
                                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                                     logger.info(
-                                        "Downloaded full thumbnail candidate [%d] %s (%dx%d, %d bytes)",
-                                        idx, url, orig_w, orig_h, os.path.getsize(output_path),
+                                        "Downloaded full thumbnail candidate [%d] %s (%dx%d, %d bytes, is_vertical=%s)",
+                                        idx, url, final_w, final_h, os.path.getsize(output_path), is_vertical,
                                     )
-                                    return (output_path, orig_w, orig_h)
+                                    return (output_path, final_w, final_h)
                     except Exception as cand_err:
                         logger.debug("Candidate full thumbnail failed (%s): %s", url, cand_err)
                         continue

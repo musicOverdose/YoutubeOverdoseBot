@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import shutil
 import signal
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple, Union
 from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB, TDRC, ID3NoHeaderError
 from PIL import Image
@@ -91,6 +93,165 @@ class FFmpegService:
         )
 
     @classmethod
+    async def prepend_thumbnail_intro(
+        cls,
+        video_path: str,
+        output_path: str,
+        thumbnail_image_path: str,
+        cover_image_path: Optional[str] = None,
+        duration_sec: float = 0.1,
+        cancellation_event: Optional[asyncio.Event] = None,
+    ) -> bool:
+        """
+        Prepends a brief (default 0.1s) intro clip generated from thumbnail_image_path
+        to the video stream using FFmpeg concat demuxer with -c copy.
+        ZERO VIDEO RE-ENCODING: The main video stream is copied directly without re-encoding.
+        This guarantees that Telegram's server-side thumbnail extraction extracts the
+        creator's exact thumbnail from frame 0 of stream 0.
+        If cover_image_path is provided, also attaches it as an attached_pic video stream.
+        """
+        if not os.path.exists(video_path) or not os.path.exists(thumbnail_image_path):
+            return False
+
+        probe_data = await cls.probe_file(video_path)
+        streams = probe_data.get("streams", [])
+        v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+        if not v_stream:
+            logger.warning("No video stream in %s for prepend_thumbnail_intro", video_path)
+            return False
+
+        try:
+            width = int(v_stream.get("width", 0))
+            height = int(v_stream.get("height", 0))
+        except (ValueError, TypeError):
+            width, height = 0, 0
+
+        if width <= 0 or height <= 0:
+            logger.warning("Invalid video dimensions (%dx%d) in %s", width, height, video_path)
+            return False
+
+        # Account for rotation metadata if present
+        tags = v_stream.get("tags") or {}
+        rotate_val = tags.get("rotate")
+        if rotate_val is None:
+            for sd in v_stream.get("side_data_list") or []:
+                if isinstance(sd, dict) and "rotation" in sd:
+                    rotate_val = sd.get("rotation")
+                    break
+        if rotate_val is not None:
+            try:
+                if abs(int(float(rotate_val))) in (90, 270):
+                    width, height = height, width
+            except (ValueError, TypeError):
+                pass
+
+        vcodec = (v_stream.get("codec_name") or "h264").lower()
+        encoder = "libx265" if vcodec in ("hevc", "h265", "hev1", "hvc1") else "libx264"
+        pix_fmt = v_stream.get("pix_fmt") or "yuv420p"
+        r_fps = v_stream.get("r_frame_rate") or "30/1"
+
+        a_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        has_audio = a_stream is not None
+
+        temp_dir = tempfile.mkdtemp(prefix="thumb_intro_")
+        intro_file = os.path.join(temp_dir, "intro.mp4")
+        concat_list = os.path.join(temp_dir, "list.txt")
+
+        try:
+            # 1. Generate 0.1s intro snippet from thumbnail image matching video specs
+            cmd_intro = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-t", str(duration_sec),
+                "-i", thumbnail_image_path,
+            ]
+            if has_audio:
+                sample_rate = a_stream.get("sample_rate") or "44100"
+                channels = int(a_stream.get("channels") or 2)
+                cl = "mono" if channels == 1 else "stereo"
+                cmd_intro.extend([
+                    "-f", "lavfi",
+                    "-t", str(duration_sec),
+                    "-i", f"anullsrc=r={sample_rate}:cl={cl}",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                ])
+            else:
+                cmd_intro.append("-an")
+
+            cmd_intro.extend([
+                "-c:v", encoder,
+                "-pix_fmt", pix_fmt,
+                "-r", r_fps,
+                "-vf", f"scale={width}:{height}",
+                intro_file,
+            ])
+
+            ok_intro = await cls.run_subprocess(cmd_intro, cancellation_event)
+            if not ok_intro or not os.path.exists(intro_file) or os.path.getsize(intro_file) == 0:
+                logger.warning("Failed to generate intro snippet for %s", video_path)
+                return False
+
+            # 2. Write concat demuxer instruction file
+            safe_intro = intro_file.replace("'", "'\\''")
+            safe_video = video_path.replace("'", "'\\''")
+            with open(concat_list, "w", encoding="utf-8") as f:
+                f.write(f"file '{safe_intro}'\nfile '{safe_video}'\n")
+
+            # 3. Fast concat with stream copy (-c copy)
+            has_cover = bool(
+                cover_image_path
+                and os.path.exists(cover_image_path)
+                and os.path.getsize(cover_image_path) > 0
+            )
+
+            cmd_concat = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+            ]
+            if has_cover:
+                cmd_concat.extend(["-i", cover_image_path])
+
+            cmd_concat.extend([
+                "-map", "0:v:0",
+                "-c:v:0", "copy",
+            ])
+            if has_audio:
+                cmd_concat.extend([
+                    "-map", "0:a:0",
+                    "-c:a", "copy",
+                ])
+            if has_cover:
+                cmd_concat.extend([
+                    "-map", "1:0",
+                    "-c:v:1", "copy",
+                    "-disposition:v:1", "attached_pic",
+                ])
+
+            cmd_concat.extend([
+                "-movflags", "+faststart",
+                output_path,
+            ])
+
+            ok_concat = await cls.run_subprocess(cmd_concat, cancellation_event)
+            if ok_concat and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(
+                    "Successfully prepended thumbnail intro to %s (has_cover=%s, size=%d bytes)",
+                    output_path, has_cover, os.path.getsize(output_path),
+                )
+                return True
+            else:
+                logger.warning("Concat demuxer failed for %s", output_path)
+                return False
+
+        except Exception as e:
+            logger.warning("Exception during prepend_thumbnail_intro for %s: %s", video_path, e)
+            return False
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @classmethod
     async def process_video(
         cls,
         input_path: str,
@@ -99,6 +260,7 @@ class FFmpegService:
         target_height: int,
         cancellation_event: Optional[asyncio.Event] = None,
         cover_image_path: Optional[str] = None,
+        prepend_thumbnail: bool = True,
     ) -> bool:
         """
         Remuxes video to exact output format (MP4 with target_codec + AAC).
@@ -107,7 +269,9 @@ class FFmpegService:
         NEVER re-encodes video under any circumstances.
         If the source video stream does not match target_codec, fails immediately.
         Audio is stream-copied when already AAC; otherwise remuxed to AAC.
-        If cover_image_path is provided, attaches full-res artwork as an attached_pic video stream.
+        If cover_image_path is provided and prepend_thumbnail is True, prepends a 0.1s
+        intro of the thumbnail to ensure Telegram's server extracts the exact creator
+        thumbnail for the chat bubble, and embeds cover art as attached_pic.
         """
         probe_data = await cls.probe_file(input_path)
         can_copy_v, can_copy_a = cls.can_stream_copy(probe_data, target_codec)
@@ -137,61 +301,86 @@ class FFmpegService:
         )
 
         logger.info(
-            "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for %s -> %s (codec=%s, height=%d, cover=%s)",
+            "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for %s -> %s (codec=%s, height=%d, cover=%s, prepend=%s)",
             input_path,
             output_path,
             target_codec,
             target_height,
             has_cover,
+            prepend_thumbnail,
         )
 
-        if has_cover:
-            cmd_cover = [
-                "ffmpeg", "-y",
-                "-i", input_path,
-                "-i", cover_image_path,
-                "-map", "0:v:0",
-                "-c:v:0", "copy",
-            ]
+        # 1. First, create clean remux of input_path into MP4 container (-c:v copy, AAC audio)
+        temp_dir = tempfile.mkdtemp(prefix="remux_clean_")
+        temp_remux = os.path.join(temp_dir, "clean_remux.mp4")
+
+        try:
+            cmd = ["ffmpeg", "-y", "-i", input_path]
+            cmd.extend(["-c:v", "copy"])
+
             if has_audio:
-                cmd_cover.extend(["-map", "0:a:0"])
                 if can_copy_a:
-                    cmd_cover.extend(["-c:a", "copy"])
+                    logger.info("Stream-copying audio for %s (already AAC)", input_path)
+                    cmd.extend(["-c:a", "copy"])
                 else:
-                    cmd_cover.extend(["-c:a", "aac", "-b:a", "192k"])
-
-            cmd_cover.extend([
-                "-map", "1:0",
-                "-c:v:1", "copy",
-                "-disposition:v:1", "attached_pic",
-                "-movflags", "+faststart",
-                output_path,
-            ])
-
-            try:
-                ok = await cls.run_subprocess(cmd_cover, cancellation_event)
-                if ok and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                    logger.info("Successfully remuxed video with native attached_pic cover art: %s", output_path)
-                    return True
-                logger.warning("Remuxing with attached_pic cover failed; falling back to clean remux without cover")
-            except Exception as cover_err:
-                logger.warning("Error embedding cover art: %s; falling back to clean remux without cover", cover_err)
-
-        # Standard remuxing without cover art (or fallback)
-        cmd = ["ffmpeg", "-y", "-i", input_path]
-        cmd.extend(["-c:v", "copy"])
-
-        if has_audio:
-            if can_copy_a:
-                logger.info("Stream-copying audio for %s (already AAC)", input_path)
-                cmd.extend(["-c:a", "copy"])
+                    logger.info("Remuxing audio to AAC for %s", input_path)
+                    cmd.extend(["-c:a", "aac", "-b:a", "192k"])
             else:
-                logger.info("Remuxing audio to AAC for %s", input_path)
-                cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+                cmd.append("-an")
 
-        cmd.extend(["-movflags", "+faststart", output_path])
+            cmd.extend(["-movflags", "+faststart", temp_remux])
 
-        return await cls.run_subprocess(cmd, cancellation_event)
+            remux_ok = await cls.run_subprocess(cmd, cancellation_event)
+            if not remux_ok or not os.path.exists(temp_remux) or os.path.getsize(temp_remux) == 0:
+                logger.error("Standard remuxing failed for %s", input_path)
+                return False
+
+            # 2. If thumbnail prepending is enabled and cover is available:
+            if has_cover and prepend_thumbnail:
+                try:
+                    prepended = await cls.prepend_thumbnail_intro(
+                        video_path=temp_remux,
+                        output_path=output_path,
+                        thumbnail_image_path=cover_image_path,
+                        cover_image_path=cover_image_path,
+                        duration_sec=0.1,
+                        cancellation_event=cancellation_event,
+                    )
+                    if prepended and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                        return True
+                    logger.warning("Prepending thumbnail intro failed; falling back to standard cover remux")
+                except Exception as p_err:
+                    logger.warning("Error prepending thumbnail intro: %s; falling back to standard cover remux", p_err)
+
+            # 3. Fallback: attach cover via attached_pic if cover exists (without intro)
+            if has_cover:
+                cmd_cover = [
+                    "ffmpeg", "-y",
+                    "-i", temp_remux,
+                    "-i", cover_image_path,
+                    "-map", "0:v:0",
+                    "-c:v:0", "copy",
+                ]
+                if has_audio:
+                    cmd_cover.extend(["-map", "0:a:0", "-c:a", "copy"])
+                cmd_cover.extend([
+                    "-map", "1:0",
+                    "-c:v:1", "copy",
+                    "-disposition:v:1", "attached_pic",
+                    "-movflags", "+faststart",
+                    output_path,
+                ])
+                ok_cov = await cls.run_subprocess(cmd_cover, cancellation_event)
+                if ok_cov and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    return True
+                logger.warning("Attaching cover failed; copying clean remux to output")
+
+            # Clean copy without cover
+            shutil.copy2(temp_remux, output_path)
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     @staticmethod
     def resolve_audio_metadata(
