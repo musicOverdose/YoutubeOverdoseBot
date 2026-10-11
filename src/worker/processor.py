@@ -40,6 +40,30 @@ from src.worker.telegram_factory import TelegramClientFactory
 logger = setup_logger("worker_processor")
 
 
+def format_video_caption_resolution(resolution: Optional[str], height: Optional[int] = None) -> str:
+    """
+    Formats the resolution text for video message captions on Telegram.
+    For 1440p and 2160p, explicitly appends '2K' and '4K' (e.g. '1440p - 2K', '2160p - 4K').
+    """
+    res = (resolution or "").strip()
+    is_4k = (height == 2160) or ("2160" in res)
+    is_2k = (height == 1440) or ("1440" in res)
+
+    if is_4k:
+        if "4k" not in res.lower():
+            if res:
+                return f"{res} - 4K"
+            return "2160p - 4K"
+        return res
+    if is_2k:
+        if "2k" not in res.lower():
+            if res:
+                return f"{res} - 2K"
+            return "1440p - 2K"
+        return res
+    return res or (f"{height}p" if height else "")
+
+
 class JobProcessor:
     def __init__(self, bot: Optional[Bot] = None):
         self.bot = bot
@@ -561,7 +585,8 @@ class JobProcessor:
                     await session.commit()
                     await notifier.update("📤", "Uploading...", "Sending video to Telegram...", force=True)
 
-                    caption_text = f"🎬 <b>{job.title}</b>\n({job.resolution})"
+                    disp_res = format_video_caption_resolution(job.resolution, target_height)
+                    caption_text = f"🎬 <b>{job.title}</b>\n({disp_res})" if disp_res else f"🎬 <b>{job.title}</b>"
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
                         api_mode=api_mode,

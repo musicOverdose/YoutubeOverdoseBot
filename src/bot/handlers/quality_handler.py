@@ -221,7 +221,7 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
         info = None
 
     raw_description = (info.get("description") if info else "") or ""
-    description = raw_description.strip()
+    description = YtDlpService.clean_video_description(raw_description)
 
     if not description:
         await bot.send_message(

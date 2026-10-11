@@ -33,7 +33,7 @@ def build_quality_keyboard(
 
     # Audio & Subtitle utility row
     utility_row = [
-        InlineKeyboardButton(text="🎵 MP3", callback_data=f"aud:{source_id}:MP3"),
+        InlineKeyboardButton(text="💿 MP3", callback_data=f"aud:{source_id}:MP3"),
         InlineKeyboardButton(text="💬 Subtitle", callback_data=f"sub_menu:{source_id}"),
     ]
     keyboard.append(utility_row)

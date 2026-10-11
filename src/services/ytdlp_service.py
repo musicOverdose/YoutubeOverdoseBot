@@ -923,3 +923,74 @@ class YtDlpService:
                         logger.warning("on_retry callback failed: %s", cb_err)
 
                 await asyncio.sleep(wait_time)
+
+    @staticmethod
+    def clean_video_description(raw: str) -> str:
+        """
+        Cleans video description by stripping encyclopedic game/movie/topic explanation sections
+        and Wikipedia overviews (e.g., 'About the Game', 'About this game', 'Game details', GTA V synopsis),
+        retaining only the creator's actual video description and links.
+        Falls back to original text if stripping results in empty content.
+        """
+        if not raw or not raw.strip():
+            return ""
+
+        original = raw.strip()
+
+        # 1. Regex to match topic/game/movie/encyclopedic section headers
+        header_line_re = re.compile(
+            r"(?i)^\s*(?:[-=~_*]{2,}\s*)?"
+            r"(?:About\s+(?:the|this)\s+(?:game|movie|film|show|series|anime)|"
+            r"About\s+Grand\s+Theft\s+Auto(?:\s+[V5])?|About\s+GTA(?:\s+[V5])?|"
+            r"Game\s+(?:overview|synopsis|details|information|info|description)|"
+            r"Movie\s+(?:overview|synopsis|details|info)|"
+            r"Related\s+topics?|Topic\s+info(?:rmation)?|"
+            r"(?:Source:\s*)?Wikipedia(?:\s+summary|\s+overview)?)\s*[:\-]?"
+        )
+
+        # 2. Standalone encyclopedic game / topic summary patterns
+        encyclopedic_re = re.compile(
+            r"(?i)\b(?:is an?\s+(?:action-adventure|open[-\s]world|role[-\s]playing|first[-\s]person|third[-\s]person|survival|sandbox|simulation|multiplayer|video)\s+game\s+(?:developed|published|set\s+in)\b|"
+            r"developed\s+by\s+[A-Za-z0-9\s]+and\s+published\s+by\b|"
+            r"is\s+a\s+\d{4}\s+(?:action-adventure|video|role[-\s]playing)\s+game\b|"
+            r"set\s+within\s+the\s+fictional\s+(?:state|city|world)\s+of\b|"
+            r"according\s+to\s+wikipedia\b|source:\s*wikipedia\b)"
+        )
+
+        # 3. Next section headers to resume capturing normal description
+        resume_section_re = re.compile(
+            r"(?i)^\s*(?:[-=~_*]{2,}\s*)?(?:Follow|Subscribe|Music|Socials?|Twitter|Discord|Instagram|Facebook|Credits?|Thanks|Buy|Links?|Watch|Playlist|Tracklist|Cast|Crew)\b"
+        )
+
+        paragraphs = re.split(r"\n\s*\n", original)
+        cleaned_paras = []
+        in_topic_section = False
+
+        for para in paragraphs:
+            p_strip = para.strip()
+            if not p_strip:
+                continue
+
+            first_line = p_strip.split("\n")[0].strip()
+
+            # Check if this paragraph begins an encyclopedic topic/game section
+            if header_line_re.match(first_line):
+                in_topic_section = True
+                continue
+
+            if in_topic_section:
+                if resume_section_re.search(p_strip):
+                    in_topic_section = False
+                    cleaned_paras.append(para)
+                elif re.match(r"^\s*[-=~_*]{3,}\s*$", p_strip):
+                    in_topic_section = False
+                continue
+
+            # Check standalone encyclopedic paragraphs
+            if encyclopedic_re.search(p_strip):
+                continue
+
+            cleaned_paras.append(para)
+
+        res = "\n\n".join(cleaned_paras).strip()
+        return res if res else original

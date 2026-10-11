@@ -76,8 +76,35 @@ def test_keyboard_contains_thumbnail_and_description_buttons():
 
     assert "🖼 Thumbnail" in btn_texts
     assert "📝 Description" in btn_texts
+    assert "💿 MP3" in btn_texts
     assert "thumb:test12345" in btn_datas
     assert "desc:test12345" in btn_datas
+    assert "aud:test12345:MP3" in btn_datas
+
+
+def test_clean_video_description_strips_topics_and_game_synopsis():
+    raw_desc = (
+        "Check out my awesome gameplay of mission 1!\n"
+        "Don't forget to like and subscribe.\n\n"
+        "About the game:\n"
+        "Grand Theft Auto V is a 2013 action-adventure game developed by Rockstar North "
+        "and published by Rockstar Games. Set within the fictional state of San Andreas...\n\n"
+        "Follow me on Twitter: https://twitter.com/gamer"
+    )
+    cleaned = YtDlpService.clean_video_description(raw_desc)
+    assert "Check out my awesome gameplay of mission 1!" in cleaned
+    assert "Follow me on Twitter: https://twitter.com/gamer" in cleaned
+    assert "About the game" not in cleaned
+    assert "Rockstar North and published by Rockstar Games" not in cleaned
+
+
+def test_clean_video_description_preserves_standard_description():
+    normal_desc = (
+        "Here is a regular video description.\n"
+        "Links:\n"
+        "https://example.com"
+    )
+    assert YtDlpService.clean_video_description(normal_desc) == normal_desc
 
 
 @pytest.mark.asyncio

@@ -96,7 +96,7 @@ User sends YouTube URL
 ├─────────────┼─────────────┤
 │    480p     │    360p     │
 ├─────────────┼─────────────┤
-│   🎵 MP3    │ 💬 Subtitle │
+│   💿 MP3    │ 💬 Subtitle │
 └─────────────┴─────────────┘
         │
         ▼ (Single Tap Quality Selection)

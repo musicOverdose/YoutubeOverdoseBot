@@ -47,3 +47,27 @@ def test_caption_formatting_quality_only():
     assert caption_text == "🎬 <b>Best Video 2026</b>\n(1080p)"
     assert "H264" not in caption_text
     assert "H265" not in caption_text
+
+
+def test_caption_formatting_2k_and_4k():
+    from src.worker.processor import format_video_caption_resolution
+
+    # Standard resolutions
+    assert format_video_caption_resolution("1080p", 1080) == "1080p"
+    assert format_video_caption_resolution("720p", 720) == "720p"
+
+    # 1440p -> 2K
+    assert format_video_caption_resolution("1440p", 1440) == "1440p - 2K"
+    assert format_video_caption_resolution(None, 1440) == "1440p - 2K"
+
+    # 2160p -> 4K
+    assert format_video_caption_resolution("2160p", 2160) == "2160p - 4K"
+    assert format_video_caption_resolution(None, 2160) == "2160p - 4K"
+
+    # Vertical resolutions
+    assert format_video_caption_resolution("1440p (Vertical)", 1440) == "1440p (Vertical) - 2K"
+    assert format_video_caption_resolution("2160p (Vertical)", 2160) == "2160p (Vertical) - 4K"
+
+    # Does not duplicate if already present
+    assert format_video_caption_resolution("1440p - 2K", 1440) == "1440p - 2K"
+    assert format_video_caption_resolution("2160p - 4K", 2160) == "2160p - 4K"

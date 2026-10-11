@@ -158,7 +158,7 @@ DEFAULT_WELCOME_MESSAGE = (
 DEFAULT_HELP_MESSAGE = (
     "📖 <b>How to use Youtube Overdose:</b>\n\n"
     "1. 🔗 <b>Send a Link:</b> Paste any YouTube video or Shorts URL in the chat.\n"
-    "2. 🎛 <b>Select Quality:</b> Choose your preferred resolution (144p–4K), 🎵 MP3 audio, or 💬 Subtitles.\n"
+    "2. 🎛 <b>Select Quality:</b> Choose your preferred resolution (144p–4K), 💿 MP3 audio, or 💬 Subtitles.\n"
     "3. ⚡ <b>Instant Delivery:</b> The bot delivers the media with original aspect ratio and cleans up progress messages.\n"
     "4. ❌ <b>Cancel Anytime:</b> Use the Cancel button on the menu to dismiss unwanted requests.\n\n"
     "💡 <i>Tip: Send /start anytime to view the main welcome menu.</i>"
