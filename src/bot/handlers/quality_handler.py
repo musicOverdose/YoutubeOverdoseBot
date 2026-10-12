@@ -799,6 +799,8 @@ async def on_advanced_back_to_menu(callback: CallbackQuery, bot: Bot):
         if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
             return
 
+    await clear_adv_options(user_id, chat_id, source_id)
+
     canonical_url = get_canonical_url(source_id)
     try:
         info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)

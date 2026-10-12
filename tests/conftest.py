@@ -44,6 +44,9 @@ async def init_test_db(monkeypatch):
     monkeypatch.setattr("src.worker.processor.get_redis_client", lambda: mock_r)
     monkeypatch.setattr("src.worker.telegram_factory.get_redis_client", lambda: mock_r)
     monkeypatch.setattr("src.services.ytdlp_service.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.bot.handlers.quality_handler.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.bot.handlers.audio_handler.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.bot.handlers.codec_handler.get_redis_client", lambda: mock_r)
 
     # Patch database engine across modules
     monkeypatch.setattr("src.core.database.engine", test_engine)

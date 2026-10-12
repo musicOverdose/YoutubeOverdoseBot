@@ -265,7 +265,7 @@ class JobProcessor:
             job.status = JobStatus.PREPARING.value
             job.started_at = datetime.now(timezone.utc)
             await session.commit()
-            await notifier.update("🔎", "Preparing", "Initializing download parameters...", force=True)
+            await notifier.update_unified_progress(2.0, subtitle="Starting...", force=True)
 
             try:
                 # 2. Check for cancellation
@@ -364,10 +364,10 @@ class JobProcessor:
                         clip_status = f" • Clip ({format_timestamp(job.clip_start)} - {format_timestamp(job.clip_end)})"
                     if is_muted:
                         clip_status += " • Muted"
-                    await notifier.update("⬇️", "Downloading video", f"Resolution: {job.resolution} ({target_codec}){clip_status}", force=True)
+                    await notifier.update_unified_progress(5.0, subtitle="Starting...", force=True)
 
                     logger.info(
-                        "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for job %s (resolution=%dp, codec=%s, is_clip=%s, is_muted=%s)",
+                        "OPERATION: DOWNLOAD + REMUX for job %s (resolution=%dp, codec=%s, is_clip=%s, is_muted=%s)",
                         job_id,
                         target_height,
                         target_codec,
@@ -383,10 +383,19 @@ class JobProcessor:
                         "format": ydl_format,
                         "writethumbnail": True,
                     })
+
+                    clip_offset = None
+                    clip_duration = None
                     if is_clip:
+                        # 5-second cushion to capture the preceding keyframe, eliminating blurry start on iOS
+                        cushion_sec = 5.0 if (job.clip_start and job.clip_start > 0) else 0.0
+                        dl_start = max(0.0, float(job.clip_start or 0) - cushion_sec)
+                        dl_end = float(job.clip_end)
                         ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(
-                            None, [(job.clip_start, job.clip_end)]
+                            None, [(dl_start, dl_end)]
                         )
+                        clip_offset = float(job.clip_start or 0) - dl_start
+                        clip_duration = float((job.clip_end or 0) - (job.clip_start or 0))
 
                     loop = asyncio.get_running_loop()
 
@@ -396,11 +405,12 @@ class JobProcessor:
                                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
                                 downloaded = d.get("downloaded_bytes", 0)
                                 pct = (downloaded / total) * 100
+                                overall_pct = 5.0 + (pct * 0.80)
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
                                 asyncio.run_coroutine_threadsafe(
-                                    notifier.update_download_progress(
-                                        "⬇️", "Downloading video", pct, speed=speed, eta=eta
+                                    notifier.update_unified_progress(
+                                        overall_pct, speed=speed, eta=eta
                                     ),
                                     loop,
                                 )
@@ -526,7 +536,7 @@ class JobProcessor:
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
-                    await notifier.update("🔧", "Remuxing (stream copy)...", f"Muxing {target_codec} source into MP4 container...", force=True)
+                    await notifier.update_unified_progress(88.0, subtitle="Processing media...", force=True)
 
                     output_file = os.path.join(job_dir, "output.mp4")
                     process_ok = await FFmpegService.process_video(
@@ -537,6 +547,8 @@ class JobProcessor:
                         cover_image_path=raw_cover_path if cover_downloaded else None,
                         prepend_thumbnail=False if is_clip else True,
                         is_muted=is_muted,
+                        clip_offset=clip_offset,
+                        clip_duration=clip_duration,
                     )
                     if not process_ok or not os.path.exists(output_file):
                         raise RuntimeError("FFmpeg processing failed")
@@ -555,8 +567,6 @@ class JobProcessor:
                         raise ValueError(f"Could not extract valid video metadata: {meta_err}") from meta_err
 
                     # 3. Generate high-fidelity JPEG thumbnail for Telegram chat bubble (320px Lanczos + sharpened)
-                    thumb_desc = "Processing official vertical cover..." if is_vertical else "Processing official creator artwork..."
-                    await notifier.update("🖼️", "Preparing thumbnail...", thumb_desc, force=True)
                     thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                     thumb_ok = False
                     target_ratio = (width / float(height)) if is_vertical and height > 0 else None
@@ -597,7 +607,7 @@ class JobProcessor:
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
-                    await notifier.update("📤", "Uploading...", "Sending video to Telegram...", force=True)
+                    await notifier.update_unified_progress(95.0, subtitle="Uploading to Telegram...", force=True)
 
                     disp_res = format_video_caption_resolution(job.resolution, target_height)
                     tag_parts = [disp_res] if disp_res else []
@@ -655,10 +665,7 @@ class JobProcessor:
                     is_audio_clip = (job.clip_start is not None and job.clip_end is not None)
                     job.status = JobStatus.DOWNLOADING.value
                     await session.commit()
-                    audio_info = ""
-                    if is_audio_clip:
-                        audio_info = f" • Clip ({format_timestamp(job.clip_start)} - {format_timestamp(job.clip_end)})"
-                    await notifier.update("⬇️", "Downloading", f"Fetching high quality audio...{audio_info}", force=True)
+                    await notifier.update_unified_progress(5.0, subtitle="Starting...", force=True)
 
                     # Extract video metadata to get rich audio tags (artist, title, upload_date, etc.)
                     meta_info = {}
@@ -697,11 +704,12 @@ class JobProcessor:
                                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
                                 downloaded = d.get("downloaded_bytes", 0)
                                 pct = (downloaded / total) * 100
+                                overall_pct = 5.0 + (pct * 0.80)
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
                                 asyncio.run_coroutine_threadsafe(
-                                    notifier.update_download_progress(
-                                        "🎵", "Downloading audio", pct, speed=speed, eta=eta
+                                    notifier.update_unified_progress(
+                                        overall_pct, speed=speed, eta=eta
                                     ),
                                     loop,
                                 )
@@ -745,7 +753,7 @@ class JobProcessor:
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
-                    await notifier.update("🎵", "Preparing MP3...", "Converting audio with ID3 tags...", force=True)
+                    await notifier.update_unified_progress(88.0, subtitle="Processing audio...", force=True)
 
                     output_mp3 = os.path.join(job_dir, "output.mp3")
                     mp3_ok = await FFmpegService.extract_mp3(
@@ -762,7 +770,7 @@ class JobProcessor:
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
-                    await notifier.update("📤", "Uploading...", "Sending MP3 to Telegram...", force=True)
+                    await notifier.update_unified_progress(95.0, subtitle="Uploading to Telegram...", force=True)
 
                     tg_thumbnail = FSInputFile(cover_jpg_path) if os.path.exists(cover_jpg_path) else None
 

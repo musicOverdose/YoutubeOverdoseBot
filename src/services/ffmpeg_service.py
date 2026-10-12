@@ -331,22 +331,20 @@ class FFmpegService:
         cover_image_path: Optional[str] = None,
         prepend_thumbnail: bool = True,
         is_muted: bool = False,
+        clip_offset: Optional[float] = None,
+        clip_duration: Optional[float] = None,
     ) -> bool:
         """
         Remuxes video to exact output format (MP4 with target_codec + AAC).
-        STRICT SOURCE-CODEC-ONLY INVARIANT:
-        The video stream is ALWAYS stream-copied (-c:v copy).
-        NEVER re-encodes video under any circumstances.
-        If the source video stream does not match target_codec, fails immediately.
-        Audio is stream-copied when already AAC; otherwise remuxed to AAC.
-        If cover_image_path is provided and prepend_thumbnail is True, prepends a 0.1s
-        intro of the thumbnail to ensure Telegram's server extracts the exact creator
-        thumbnail for the chat bubble, and embeds cover art as attached_pic.
+        STRICT SOURCE-CODEC-ONLY INVARIANT FOR FULL DOWNLOADS:
+        The video stream is ALWAYS stream-copied (-c:v copy) for full downloads.
+        For trimmed clips, encodes the cut segment with IDR keyframe alignment at pts=0
+        to ensure flawless playback on iOS / mobile hardware decoders without blurry start.
         """
         probe_data = await cls.probe_file(input_path)
         can_copy_v, can_copy_a = cls.can_stream_copy(probe_data, target_codec)
 
-        if not can_copy_v:
+        if not can_copy_v and not clip_duration:
             streams = probe_data.get("streams", [])
             v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
             actual_vcodec = v_stream.get("codec_name") if v_stream else "unknown"
@@ -371,25 +369,40 @@ class FFmpegService:
         )
 
         logger.info(
-            "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for %s -> %s (codec=%s, height=%d, cover=%s, prepend=%s)",
+            "OPERATION: REMUX for %s -> %s (codec=%s, height=%d, clip=%s, cover=%s)",
             input_path,
             output_path,
             target_codec,
             target_height,
+            bool(clip_duration),
             has_cover,
-            prepend_thumbnail,
         )
 
-        # 1. First, create clean remux of input_path into MP4 container (-c:v copy, AAC audio)
+        # 1. First, create clean remux of input_path into MP4 container
         temp_dir = tempfile.mkdtemp(prefix="remux_clean_")
         temp_remux = os.path.join(temp_dir, "clean_remux.mp4")
 
         try:
-            cmd = ["ffmpeg", "-y", "-i", input_path]
-            cmd.extend(["-c:v", "copy"])
+            cmd = ["ffmpeg", "-y"]
+            if clip_offset and clip_offset > 0:
+                cmd.extend(["-ss", str(clip_offset)])
+            cmd.extend(["-i", input_path])
+            if clip_duration and clip_duration > 0:
+                cmd.extend(["-t", str(clip_duration)])
+
+            if clip_duration:
+                # Keyframe-accurate encode for clips: ensures Frame 0 is an IDR keyframe at pts=0.000000
+                # Resolves blurry/distorted first few seconds on iOS and mobile hardware decoders
+                if target_codec.upper() == "H265":
+                    cmd.extend(["-c:v", "libx265", "-preset", "fast", "-crf", "24", "-tag:v", "hvc1"])
+                else:
+                    cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+            else:
+                # Full video download: 100% stream copy (zero re-encoding)
+                cmd.extend(["-c:v", "copy"])
 
             if has_audio and not is_muted:
-                if can_copy_a:
+                if can_copy_a and not clip_duration:
                     logger.info("Stream-copying audio for %s (already AAC)", input_path)
                     cmd.extend(["-c:a", "copy"])
                 else:
@@ -431,7 +444,7 @@ class FFmpegService:
                     "-map", "0:v:0",
                     "-c:v:0", "copy",
                 ]
-                if has_audio:
+                if has_audio and not is_muted:
                     cmd_cover.extend(["-map", "0:a:0", "-c:a", "copy"])
                 cmd_cover.extend([
                     "-map", "1:0",

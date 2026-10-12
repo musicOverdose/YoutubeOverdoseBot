@@ -283,3 +283,88 @@ class TestKeyboards:
         assert "🎬 2K" in flat
         assert "🎬 1080p" in flat
         assert "🔙 Back to Options" in flat
+
+
+class TestClipPrecisionAndProgress:
+    @pytest.mark.asyncio
+    async def test_process_video_clip_encoding(self):
+        from src.services.ffmpeg_service import FFmpegService
+        with patch.object(FFmpegService, "probe_file", return_value={"streams": [{"codec_type": "video", "codec_name": "h264"}, {"codec_type": "audio", "codec_name": "aac"}]}), \
+             patch.object(FFmpegService, "run_subprocess", return_value=True) as mock_run, \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getsize", return_value=1024), \
+             patch("shutil.copy2") as mock_copy:
+            
+            ok = await FFmpegService.process_video(
+                input_path="/tmp/in.mp4",
+                output_path="/tmp/out.mp4",
+                target_codec="H264",
+                target_height=720,
+                clip_offset=5.0,
+                clip_duration=60.0,
+            )
+            assert ok is True
+            assert mock_run.called
+            cmd = mock_run.call_args[0][0]
+            # Must seek by clip_offset and specify clip_duration
+            assert "-ss" in cmd and "5.0" in cmd
+            assert "-t" in cmd and "60.0" in cmd
+            # Must encode with libx264 for keyframe alignment
+            assert "libx264" in cmd
+
+    @pytest.mark.asyncio
+    async def test_unified_progress_notifier(self):
+        from src.worker.notifier import StatusNotifier
+        bot_mock = AsyncMock()
+        notifier = StatusNotifier(bot=bot_mock, requests=[{"chat_id": 12345, "message_id": 999}])
+        
+        await notifier.update_unified_progress(
+            pct=65.0,
+            speed="12.4 MB/s",
+            eta="00:05",
+            force=True,
+        )
+        assert bot_mock.edit_message_text.called
+        call_kwargs = bot_mock.edit_message_text.call_args.kwargs
+        text = call_kwargs.get("text", "")
+        assert "⚡️ <b>Please wait...</b>" in text
+        assert "65%" in text
+        assert "12.4 MB/s • ETA 00:05" in text
+        # Does NOT contain technical jargon
+        assert "Remuxing" not in text
+        assert "stream copy" not in text
+
+    @pytest.mark.asyncio
+    async def test_back_to_menu_resets_options(self):
+        from src.bot.handlers.quality_handler import on_advanced_back_to_menu, set_adv_options, get_adv_options
+        user_id = 1111
+        chat_id = 2222
+        source_id = "testvid123"
+
+        # Pre-set some advanced options
+        await set_adv_options(user_id, chat_id, source_id, {
+            "clip_start": 30,
+            "clip_end": 60,
+            "is_muted": True,
+            "mode": "mp3",
+        })
+
+        callback_mock = AsyncMock()
+        callback_mock.from_user.id = user_id
+        callback_mock.message.chat.id = chat_id
+        callback_mock.message.caption = "Menu"
+        callback_mock.data = f"adv_back:{source_id}"
+
+        bot_mock = AsyncMock()
+
+        with patch("src.bot.handlers.quality_handler.MustJoinService.enforce_must_join_callback", return_value=True), \
+             patch("src.bot.handlers.quality_handler.YtDlpService.extract_metadata", return_value={"title": "Test Vid", "formats": []}), \
+             patch("src.bot.handlers.quality_handler.safe_callback_answer"):
+            await on_advanced_back_to_menu(callback_mock, bot_mock)
+
+        # Verify options are reset to default
+        opts = await get_adv_options(user_id, chat_id, source_id)
+        assert opts.get("clip_start") is None
+        assert opts.get("clip_end") is None
+        assert opts.get("is_muted") is False
+        assert opts.get("mode") == "video"

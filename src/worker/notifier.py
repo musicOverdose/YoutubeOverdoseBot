@@ -65,6 +65,40 @@ class StatusNotifier:
             force=force,
         )
 
+    async def update_unified_progress(
+        self,
+        pct: float,
+        speed: str = "",
+        eta: str = "",
+        subtitle: str = "",
+        force: bool = False,
+    ) -> None:
+        """
+        Renders a clean unified progress bar without exposing internal pipeline steps:
+        ⚡️ <b>Please wait...</b>
+        ██████████░░░░░░ 65%
+        12.4 MB/s • ETA 00:05
+        """
+        bar_line = render_progress_bar(pct)
+        lines = [bar_line]
+        stats = []
+        if speed:
+            stats.append(speed)
+        if eta:
+            stats.append(f"ETA {eta}")
+        if stats:
+            lines.append(" • ".join(stats))
+        elif subtitle:
+            lines.append(subtitle)
+
+        detail_text = "\n".join(lines)
+        await self.update(
+            stage_icon="⚡️",
+            stage_name="Please wait...",
+            detail=detail_text,
+            force=force,
+        )
+
     async def update(
         self,
         stage_icon: str,

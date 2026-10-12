@@ -46,11 +46,6 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
     title = info.get("title", "YouTube Video")
     thumbnail_url = ThumbnailService.get_best_thumbnail_url(info) or info.get("thumbnail")
 
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
-
     keyboard = build_quality_keyboard(source_id, available_heights, resolution_labels=resolution_labels)
 
     is_vertical = (
@@ -75,6 +70,10 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
                 caption=f"<b>{title}</b>",
                 reply_markup=keyboard,
             )
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
             return
     except Exception as e:
         logger.warning(f"Could not send thumbnail photo: {e}. Falling back to text.")
@@ -90,6 +89,10 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
         text=f"🎬 <b>{title}</b>",
         reply_markup=keyboard,
     )
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
 
 
 @url_router.message(lambda msg: msg.text and extract_youtube_id(msg.text) is not None)
