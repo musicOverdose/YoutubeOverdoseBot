@@ -578,9 +578,13 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
     max_clip_min = max(1, max_clip_duration // 60)
     prompt_msg = await callback.message.answer(
         "✂️ <b>Enter Clip Range</b>\n\n"
-        "Format: <code>start - end</code> (e.g. <code>1:23 - 3:30</code>)\n"
-        "<i>💡 Tip: You can use <code>start - max</code> or <code>1:00 - max</code>\n"
-        f"Max length: {max_clip_min} min • Send /cancel to discard</i>"
+        "Format: <code>start - end</code>\n\n"
+        "Examples:\n"
+        "• <code>1:23 - 3:30</code>\n"
+        "• <code>start - max</code>\n"
+        "• <code>1:00 - max</code>\n\n"
+        f"Max length: {max_clip_min} min\n"
+        "/cancel"
     )
 
     await state.set_state(AdvancedClipStates.waiting_for_timestamp)
@@ -640,7 +644,11 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
     if not ok:
         err_prompt = await message.answer(
             f"⚠️ {err}\n\n"
-            "Please try again (e.g. <code>1:23 - 3:30</code> or <code>1:00 - max</code>) or send /cancel:"
+            "Examples:\n"
+            "• <code>1:23 - 3:30</code>\n"
+            "• <code>start - max</code>\n"
+            "• <code>1:00 - max</code>\n\n"
+            "/cancel"
         )
         await state.update_data(prompt_msg_id=err_prompt.message_id)
         return
