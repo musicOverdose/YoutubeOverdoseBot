@@ -12,7 +12,7 @@ from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.models.user import User
 from src.services.must_join_service import MustJoinService
-from src.services.setting_service import DEFAULT_HELP_MESSAGE, DEFAULT_WELCOME_MESSAGE, SettingService
+from src.services.setting_service import DEFAULT_ABOUT_MESSAGE, DEFAULT_HELP_MESSAGE, DEFAULT_WELCOME_MESSAGE, SettingService
 
 logger = setup_logger("bot_base")
 base_router = Router()
@@ -92,26 +92,29 @@ async def cmd_start(message: Message, bot: Optional[Bot] = None):
             raise
 
 
-@base_router.message(Command("help"))
-async def cmd_help(message: Message):
-    help_text = DEFAULT_HELP_MESSAGE
+@base_router.message(Command("about", "help"))
+async def cmd_about(message: Message):
+    about_text = DEFAULT_ABOUT_MESSAGE
     try:
         async with AsyncSessionLocal() as session:
             try:
-                help_text = await SettingService.get_help_message(session)
+                about_text = await SettingService.get_about_message(session)
             except Exception as e:
-                logger.warning("Failed to load help message from DB: %s. Using default.", e)
+                logger.warning("Failed to load about message from DB: %s. Using default.", e)
     except Exception as e:
-        logger.error("Database session error in /help: %s. Using default.", e)
+        logger.error("Database session error in /about: %s. Using default.", e)
 
     try:
-        await message.answer(help_text, parse_mode=ParseMode.HTML)
+        await message.answer(about_text, parse_mode=ParseMode.HTML)
     except TelegramBadRequest as e:
         err_msg = str(e).lower()
         if "can't parse entities" in err_msg or "entity" in err_msg:
-            logger.warning("Custom help message failed HTML parsing: %s. Falling back to default.", e)
-            await message.answer(DEFAULT_HELP_MESSAGE, parse_mode=ParseMode.HTML)
+            logger.warning("Custom about message failed HTML parsing: %s. Falling back to default.", e)
+            await message.answer(DEFAULT_ABOUT_MESSAGE, parse_mode=ParseMode.HTML)
         else:
-            await message.answer(help_text)
+            await message.answer(about_text)
     except Exception:
-        await message.answer(DEFAULT_HELP_MESSAGE, parse_mode=ParseMode.HTML)
+        await message.answer(DEFAULT_ABOUT_MESSAGE, parse_mode=ParseMode.HTML)
+
+
+cmd_help = cmd_about

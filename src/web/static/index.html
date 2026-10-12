@@ -620,26 +620,26 @@
             </div>
           </div>
 
-          <!-- 2. Help Message Card -->
+          <!-- 2. About Message Card -->
           <div class="card">
             <div class="card__header">
               <div class="flex items-center gap-2">
-                <span class="badge badge-info">/help</span>
-                <div class="card__title">Help Message</div>
+                <span class="badge badge-info">/about</span>
+                <div class="card__title">About Message</div>
               </div>
             </div>
             <div class="alert-strip hidden mb-3" id="bot-help-alert" role="alert"></div>
             <p class="font-xs text-secondary mb-3">
-              Sent when a user invokes /help command. Clear usage instructions and hints.
+              Sent when a user invokes /about (or /help). Author info, bot description, and credits.
             </p>
             <div class="form-group">
               <label for="bot-help-msg-area">Template (HTML):</label>
-              <textarea id="bot-help-msg-area" rows="9" placeholder="Enter /help instructions template..."></textarea>
+              <textarea id="bot-help-msg-area" rows="9" placeholder="Enter /about message template..."></textarea>
             </div>
             <div class="flex gap-2">
               <button type="button" class="btn btn-primary btn-sm" id="btn-save-help" onclick="saveHelpMessage()">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                Save Help
+                Save About
               </button>
               <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-help" onclick="resetHelpMessage()">Reset</button>
             </div>

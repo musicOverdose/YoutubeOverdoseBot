@@ -213,23 +213,25 @@ async def reset_welcome_message(
 
 
 @router.get("/help-message")
-async def get_help_message(
+@router.get("/about-message")
+async def get_about_message(
     session: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_current_admin),
 ):
-    """Retrieve the current active /help message template."""
-    msg = await SettingService.get_help_message(session)
+    """Retrieve the current active /about (or /help) message template."""
+    msg = await SettingService.get_about_message(session)
     return {"message": msg}
 
 
 @router.post("/help-message")
-async def save_help_message(
+@router.post("/about-message")
+async def save_about_message(
     req: HelpMessageRequest,
     session: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_current_admin),
 ):
-    """Save a validated custom /help message template."""
-    msg = await SettingService.save_help_message(
+    """Save a validated custom /about message template."""
+    msg = await SettingService.save_about_message(
         message=req.message,
         session=session,
         admin_username=admin.get("sub", "admin"),
@@ -238,12 +240,13 @@ async def save_help_message(
 
 
 @router.post("/help-message/reset")
-async def reset_help_message(
+@router.post("/about-message/reset")
+async def reset_about_message(
     session: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_current_admin),
 ):
-    """Reset the /help message template to default."""
-    msg = await SettingService.reset_help_message(
+    """Reset the /about message template to default."""
+    msg = await SettingService.reset_about_message(
         session=session,
         admin_username=admin.get("sub", "admin"),
     )

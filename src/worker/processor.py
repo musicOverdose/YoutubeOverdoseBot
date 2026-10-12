@@ -835,6 +835,8 @@ class JobProcessor:
                     r = get_redis_client()
                     final_srt_content = None
                     persian_handled = False
+                    notifier.start_ticker(initial_pct=5.0)
+                    notifier.set_stage("download")
 
                     # ----------------------------------------------------------
                     # PERSIAN SUBTITLE HIERARCHY (Requirements 9-13, 15)
@@ -1013,16 +1015,13 @@ class JobProcessor:
 
                             job.status = JobStatus.PROCESSING.value
                             await session.commit()
-                            await notifier.update("🌐", "Translating subtitles...", f"Translating subtitles to Persian with AI ({total_chunks} chunks)...", force=True)
+                            notifier.set_stage("process", label="🌐 Translating subtitles...")
 
                             async def _on_ai_progress(c_idx: int, total_c: int, attempt: int):
-                                pct = (c_idx / total_c) * 100.0 if total_c > 0 else 0.0
-                                bar = StatusNotifier.render_progress_bar(pct)
-                                if attempt > 1:
-                                    d_text = f"Chunk {c_idx}/{total_c} • Retry {attempt}/3\n{bar}"
-                                else:
-                                    d_text = f"Chunk {c_idx}/{total_c}\n{bar}"
-                                await notifier.update("🌐", "Translating subtitles", d_text)
+                                if total_c > 0:
+                                    target = 65.0 + (c_idx / total_c) * 23.0
+                                    notifier.target_pct = max(notifier.target_pct, target)
+                                    notifier.current_pct = max(notifier.current_pct, target - 2.0)
 
                             ok, persian_srt, ai_err = await AIService.translate_english_to_persian(
                                 english_srt, on_progress=_on_ai_progress
@@ -1044,7 +1043,7 @@ class JobProcessor:
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
-                    await notifier.update("📤", "Uploading...", "Sending subtitles to Telegram...", force=True)
+                    notifier.set_stage("upload")
 
                     caption_text = f"💬 <b>{job.title}</b> ({target_lang} Subtitle)"
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
@@ -1069,6 +1068,7 @@ class JobProcessor:
                         telegram_channel_id=cache_channel_id,
                         telegram_message_id=uploaded_msg_id,
                     )
+                    await notifier.stop_ticker()
 
                 # ==========================================
                 # FINAL DELIVERY TO SUBSCRIBERS

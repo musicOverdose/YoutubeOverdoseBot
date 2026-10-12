@@ -105,11 +105,11 @@ class FFmpegService:
         output_path: str,
         thumbnail_image_path: str,
         cover_image_path: Optional[str] = None,
-        duration_sec: float = 0.2,
+        duration_sec: float = 0.06,
         cancellation_event: Optional[asyncio.Event] = None,
     ) -> bool:
         """
-        Prepends a brief (default 0.2s) intro clip generated from thumbnail_image_path
+        Prepends a brief (default 0.06s) intro clip generated from thumbnail_image_path
         to the video stream using FFmpeg concat demuxer with -c copy.
         ZERO VIDEO RE-ENCODING: The main video stream is copied directly without re-encoding.
         This guarantees that Telegram's server-side thumbnail extraction extracts the
@@ -426,7 +426,7 @@ class FFmpegService:
                         output_path=output_path,
                         thumbnail_image_path=cover_image_path,
                         cover_image_path=cover_image_path,
-                        duration_sec=0.2,
+                        duration_sec=0.06,
                         cancellation_event=cancellation_event,
                     )
                     if prepended and os.path.exists(output_path) and os.path.getsize(output_path) > 0:

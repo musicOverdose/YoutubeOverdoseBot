@@ -895,6 +895,39 @@ def test_thumbnail_document_filename_is_concise():
     assert filename == "VSauce_thumb.jpg"
 
 
+def test_auto_crop_colored_pillarbox_and_letterbox():
+    # 1. Test brown pillarbox (Kid Cudi XEolg577-DA square album art padded to 16:9)
+    brown_pillar = Image.new("RGB", (1280, 720), (76, 59, 29))
+    # Place artwork in center 720x720 (from x=280 to x=1000)
+    for x in range(280, 1000):
+        for y in range(0, 720):
+            brown_pillar.putpixel((x, y), (180, 150, 120))
+
+    cropped_pillar = ThumbnailService.auto_crop_black_borders(brown_pillar)
+    assert cropped_pillar.width == 720
+    assert cropped_pillar.height == 720
+
+    # 2. Test colored letterbox (top and bottom borders)
+    blue_letter = Image.new("RGB", (400, 200), (30, 80, 160))
+    for x in range(0, 400):
+        for y in range(40, 160):
+            blue_letter.putpixel((x, y), (220, 40, 40))
+
+    cropped_letter = ThumbnailService.auto_crop_black_borders(blue_letter)
+    assert cropped_letter.width == 400
+    assert cropped_letter.height == 120
+
+    # 3. Test natural gradient image (must NOT be cropped)
+    grad = Image.new("RGB", (150, 150))
+    for x in range(150):
+        for y in range(150):
+            grad.putpixel((x, y), (x + 20, y + 20, 100))
+
+    cropped_grad = ThumbnailService.auto_crop_black_borders(grad)
+    assert cropped_grad.size == (150, 150)
+
+
+
 
 
 

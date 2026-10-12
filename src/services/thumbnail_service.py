@@ -379,15 +379,110 @@ class ThumbnailService:
                 crop_t = top
                 crop_b = bottom
 
+        # --- Phase 2: Uniform Colored Border Detection (e.g. XEolg577-DA) ---
+        color_tol = max(22, tolerance)
+        def _is_uniform(samples, tol):
+            r0, g0, b0 = samples[0]
+            return all(abs(r - r0) <= tol and abs(g - g0) <= tol and abs(b - b0) <= tol for r, g, b in samples)
+
+        def _color_dist(c1, c2):
+            return max(abs(c1[0] - c2[0]), abs(c1[1] - c2[1]), abs(c1[2] - c2[2]))
+
+        if crop_l == 0 and crop_r == w:
+            step_y = max(1, h // 30)
+            left_samples = [pixels[0, y] for y in range(0, h, step_y)]
+            right_samples = [pixels[w - 1, y] for y in range(0, h, step_y)]
+
+            if _is_uniform(left_samples, color_tol) and _is_uniform(right_samples, color_tol):
+                ref_l = left_samples[0]
+                ref_r = right_samples[0]
+                if _color_dist(ref_l, ref_r) <= color_tol:
+                    ref_color = ref_l
+                    l_idx = 0
+                    for x in range(w):
+                        match = True
+                        for y in range(0, h, step_y):
+                            if _color_dist(pixels[x, y], ref_color) > color_tol:
+                                match = False
+                                break
+                        if match:
+                            l_idx = x + 1
+                        else:
+                            break
+
+                    r_idx = w
+                    for x in range(w - 1, -1, -1):
+                        match = True
+                        for y in range(0, h, step_y):
+                            if _color_dist(pixels[x, y], ref_color) > color_tol:
+                                match = False
+                                break
+                        if match:
+                            r_idx = x
+                        else:
+                            break
+
+                    l_bar = l_idx
+                    r_bar = w - r_idx
+                    if l_bar >= min_bar_px and r_bar >= min_bar_px:
+                        diff = abs(l_bar - r_bar)
+                        if diff <= 30 or (0.6 <= l_bar / float(r_bar) <= 1.6):
+                            crop_l = l_idx
+                            crop_r = r_idx
+
+        if crop_t == 0 and crop_b == h:
+            step_x = max(1, w // 30)
+            top_samples = [pixels[x, 0] for x in range(0, w, step_x)]
+            bottom_samples = [pixels[x, h - 1] for x in range(0, w, step_x)]
+
+            if _is_uniform(top_samples, color_tol) and _is_uniform(bottom_samples, color_tol):
+                ref_t = top_samples[0]
+                ref_b = bottom_samples[0]
+                if _color_dist(ref_t, ref_b) <= color_tol:
+                    ref_color = ref_t
+                    t_idx = 0
+                    for y in range(h):
+                        match = True
+                        for x in range(0, w, step_x):
+                            if _color_dist(pixels[x, y], ref_color) > color_tol:
+                                match = False
+                                break
+                        if match:
+                            t_idx = y + 1
+                        else:
+                            break
+
+                    b_idx = h
+                    for y in range(h - 1, -1, -1):
+                        match = True
+                        for x in range(0, w, step_x):
+                            if _color_dist(pixels[x, y], ref_color) > color_tol:
+                                match = False
+                                break
+                        if match:
+                            b_idx = y
+                        else:
+                            break
+
+                    t_bar = t_idx
+                    b_bar = h - b_idx
+                    if t_bar >= min_bar_px and b_bar >= min_bar_px:
+                        diff = abs(t_bar - b_bar)
+                        if diff <= 30 or (0.6 <= t_bar / float(b_bar) <= 1.6):
+                            crop_t = t_idx
+                            crop_b = b_idx
+
         if crop_l > 0 or crop_r < w or crop_t > 0 or crop_b < h:
             if crop_r > crop_l + 50 and crop_b > crop_t + 50:
                 logger.info(
-                    "Auto-cropped black borders: orig=(%d, %d), box=(%d, %d, %d, %d), new=(%d, %d)",
+                    "Auto-cropped borders: orig=(%d, %d), box=(%d, %d, %d, %d), new=(%d, %d)",
                     w, h, crop_l, crop_t, crop_r, crop_b, crop_r - crop_l, crop_b - crop_t
                 )
                 return img.crop((crop_l, crop_t, crop_r, crop_b))
 
         return img
+
+    auto_crop_borders = auto_crop_black_borders
 
     @classmethod
     def process_image_file(

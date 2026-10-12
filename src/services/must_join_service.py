@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 import html
 import json
@@ -179,32 +180,34 @@ class MustJoinService:
         if not channels:
             return True, []
 
-        missing_channels = []
-
-        for ch in channels:
-            is_member = False
-            config_err: Optional[str] = None
-
+        async def _check_single(ch: RequiredChannel) -> Tuple[RequiredChannel, bool, Optional[str]]:
             if not force_authoritative:
-                r = get_redis_client()
-                cache_key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}{ch.chat_id}:{user_id}"
-                cached = await r.get(cache_key)
-                if cached == "1":
-                    is_member = True
-                elif cached == "0":
-                    is_member = False
-                else:
-                    is_member, config_err = await cls.evaluate_channel_membership(
-                        bot, ch.chat_id, user_id
-                    )
-            else:
-                is_member, config_err = await cls.evaluate_channel_membership(
-                    bot, ch.chat_id, user_id
-                )
+                try:
+                    r = get_redis_client()
+                    cache_key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}{ch.chat_id}:{user_id}"
+                    cached = await r.get(cache_key)
+                    if cached == "1":
+                        return ch, True, None
+                    elif cached == "0":
+                        return ch, False, None
+                except Exception as e:
+                    logger.warning("Redis error checking membership cache: %s", e)
+
+            is_member, config_err = await cls.evaluate_channel_membership(
+                bot, ch.chat_id, user_id
+            )
+            try:
                 r = get_redis_client()
                 cache_key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}{ch.chat_id}:{user_id}"
                 await r.set(cache_key, "1" if is_member else "0", ex=MEMBERSHIP_CACHE_TTL)
+            except Exception as e:
+                logger.warning("Redis error saving membership cache: %s", e)
 
+            return ch, is_member, config_err
+
+        results = await asyncio.gather(*(_check_single(ch) for ch in channels))
+        missing_channels = []
+        for ch, is_member, config_err in results:
             if config_err:
                 ch.last_error = config_err
                 ch.bot_status = "error"
@@ -311,7 +314,7 @@ class MustJoinService:
         chat_id = message.chat.id
 
         is_auth, missing_channels = await cls.require_must_join(
-            bot, session, user_id, username=username, force_authoritative=True
+            bot, session, user_id, username=username, force_authoritative=False
         )
         if is_auth:
             return True
@@ -356,7 +359,7 @@ class MustJoinService:
         chat_id = callback.message.chat.id if callback.message else user_id
 
         is_auth, missing_channels = await cls.require_must_join(
-            bot, session, user_id, username=username, force_authoritative=True
+            bot, session, user_id, username=username, force_authoritative=False
         )
         if is_auth:
             return True

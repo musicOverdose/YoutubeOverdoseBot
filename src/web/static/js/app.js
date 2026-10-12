@@ -1342,23 +1342,23 @@ async function saveHelpMessage() {
   const area = document.getElementById('bot-help-msg-area');
   const val = area ? area.value.trim() : '';
 
-  setButtonLoading(btn, true, 'Saving…', 'Save Help');
+  setButtonLoading(btn, true, 'Saving…', 'Save About');
   try {
-    const res = await API.post('/api/telegram/help-message', { message: val });
+    const res = await API.post('/api/telegram/about-message', { message: val });
     if (area) area.value = res.message;
-    showAlert('bot-help-alert', 'Help message template saved successfully', 'success');
-    toastSuccess('Help message saved');
+    showAlert('bot-help-alert', 'About message template saved successfully', 'success');
+    toastSuccess('About message saved');
   } catch (err) {
     showAlert('bot-help-alert', `Failed to save: ${err.message}`, 'error');
     toastError(err.message, 'Save Failed');
   } finally {
-    setButtonLoading(btn, false, 'Saving…', 'Save Help');
+    setButtonLoading(btn, false, 'Saving…', 'Save About');
   }
 }
 
 async function resetHelpMessage() {
   hideAlert('bot-help-alert');
-  const confirmed = await showConfirm('Reset /help message to system default?', 'Reset Help Message', 'Reset', 'btn-warning');
+  const confirmed = await showConfirm('Reset /about message to system default?', 'Reset About Message', 'Reset', 'btn-warning');
   if (!confirmed) return;
 
   const btn = document.getElementById('btn-reset-help');
@@ -1366,10 +1366,10 @@ async function resetHelpMessage() {
 
   setButtonLoading(btn, true, 'Resetting…', 'Reset');
   try {
-    const res = await API.post('/api/telegram/help-message/reset', {});
+    const res = await API.post('/api/telegram/about-message/reset', {});
     if (area) area.value = res.message || '';
-    showAlert('bot-help-alert', 'Help message reset to default template', 'success');
-    toastSuccess('Help message reset to default');
+    showAlert('bot-help-alert', 'About message reset to default template', 'success');
+    toastSuccess('About message reset to default');
   } catch (err) {
     showAlert('bot-help-alert', `Failed to reset: ${err.message}`, 'error');
     toastError(err.message, 'Reset Failed');

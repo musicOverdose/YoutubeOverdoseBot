@@ -29,22 +29,32 @@ Unlike conventional downloaders that eat gigabytes of VPS storage, **Youtube Ove
 
 ## ✨ Features
 
+- ✂️ **Advanced Options & Video/Audio Clipping**:
+  - Interactive range cutter: cut any custom timestamp segment (e.g., `1:23 - 3:30`, `start - max`, `1:00 - max`).
+  - Zero re-encoding overhead: losslessly cuts clips using stream-copy (`-c copy`) and native `yt-dlp` download sections.
+  - Optional Muted video mode (`[ 🔇 Mute Audio: ON/OFF ]`) and MP3 clip extraction.
+  - Configurable maximum clip duration via Web Admin (default: 15 minutes).
+  - Clean chat automation: automatically deletes timestamp prompts and user replies.
 - ⚡ **Smart Automatic Codec Selection & Stream-Copy Engine**:
   - Automatically identifies whether streams can be losslessly copied (`-c copy`) without CPU transcoding.
-  - Automatically selects the optimal Telegram-compatible codec container (AVC / H.264 or HEVC / H.265) without forcing users through confusing technical prompts.
+  - Automatically selects optimal Telegram-compatible codecs (AVC / H.264 or HEVC / H.265).
   - Minimal CPU usage: Runs effortlessly on 1-2 core VPS instances.
 - 🎯 **Dynamic 144p – 4K Resolution Filter**:
   - Dynamically extracts actual available video streams directly from YouTube.
+  - Simplified labels: `🎬 4K` (2160p) and `🎬 2K` (1440p) for clean mobile readability.
   - Intelligently filters out broken, unplayable, or sub-144p formats.
   - Enforces exact requested height—never silently downgrades or upgrades user requests.
-- 📱 **True 9:16 Vertical Video & High-Resolution Thumbnails**:
+- 📱 **True 9:16 Vertical Video & Universal Border Auto-Cropping**:
   - Native support for YouTube Shorts with accurate vertical 9:16 aspect ratio probes.
-  - Highest-quality thumbnail extraction with automatic aspect-ratio-preserving padding and luminance analysis to prevent black bars or dark title frames.
+  - **Universal Pillarbox & Letterbox Cropping**: Automatically detects and cleanly crops both black borders and solid/near-solid colored borders (such as square album artwork padded to 16:9).
+  - **Instant Frame 0 Keyframe Intro (~0.06s)**: Prepends an imperceptible 2-frame intro ensuring Telegram extracts the creator's high-res thumbnail without noticeable playback delay.
   - Embeds authoritative `ffprobe` duration, width, and height before transmission (`supports_streaming=True`).
 - 🎵 **Studio-Quality MP3 with ID3v2.3 Artwork**:
   - High-bitrate audio extraction strictly tagged with ID3v2.3 metadata (`TIT2` title, `TPE1` artist, `TALB` album, `TDRC` year).
   - High-resolution square `cover.jpg` (500×500) embedded as an `APIC` frame and passed directly to Telegram's audio player thumbnail.
-  - Clean, sanitized filenames (`Artist - Title.mp3` or `Title.mp3`).
+  - Clean non-clickable timestamp captions (`01:23 ➔ 03:30`).
+- 📊 **Animated Real-Time Progress Bar Across All Media**:
+  - Smooth animated progress bar for video downloads, audio processing, and subtitle extraction / AI translation.
 - 🛑 **Interactive Inline Cancel Button**:
   - Active downloads and queued tasks feature an inline **Cancel** button.
   - Users can cancel their jobs at any moment; active locks and temporary files are immediately cleaned up.
@@ -54,24 +64,26 @@ Unlike conventional downloaders that eat gigabytes of VPS storage, **Youtube Ove
   - Extracts clean English SRT tracks (manual or auto-generated).
   - Translates subtitles to Persian (FA) or other target languages via any OpenAI-compatible API (OpenAI, OpenRouter, Groq, local LLMs) with strict timestamp preservation.
 - 🚀 **Centralized Telegram Local Bot API (2000 MB Uploads)**:
-  - Directly communicates with a centralized Local Bot API server over the Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
-  - Enables file uploads up to **2000 MB (2 GB)** via standard HTTP multipart streaming (`is_local=False`), without requiring shared volumes or host disk staging.
+  - Directly communicates with a centralized Local Bot API server over Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
+  - Enables file uploads up to **2000 MB (2 GB)** via standard HTTP multipart streaming.
   - Dual-mode support: Seamlessly toggle between `cloud` mode (50 MB limit) and `local` mode (2000 MB limit).
 - ☁️ **Permanent Zero-Disk Cloud Storage**:
-  - Completed media is cached forever in a private Telegram channel.
+  - Completed media files (full videos, full audio, subtitles) are cached in a private Telegram channel.
   - Instant cache hits completely bypass the queue and workers.
+  - Descriptions and stand-alone thumbnails are delivered directly without polluting the cache channel.
   - All temporary files are purged from disk immediately after upload or cancellation.
-- 🛡️ **Hardened Must-Join Channel Gate**:
-  - Universal gate protecting `/start`, URL submission, and all media interactions.
-  - Generates direct channel buttons and validates user membership in real-time.
-  - Distinguishes user non-membership from bot permission errors (`CHANNEL_NOT_FOUND`, `BOT_INSUFFICIENT_PERMISSIONS`, etc.).
+- 🛡️ **Ultra-Fast Must-Join Channel Gate**:
+  - High-concurrency parallel verification (`asyncio.gather`) backed by Redis caching for sub-millisecond response on `/start` and buttons.
   - Whitelist system allows exempting specific users from the gate.
+- 🤖 **About Command (`/about`) & Credits**:
+  - Built-in `/about` command (with `/help` alias) showcasing customizable author credits.
+  - Fully editable and resettable via Web Admin UI.
 - 🍪 **Netscape YouTube Cookie Manager**:
   - Upload or paste `cookies.txt` via Web UI with Netscape format validation, atomic write, and zero-downtime hot reload.
 - 🖥️ **Obsidian Dark Web Administration Suite**:
   - Modern, responsive dark UI on port `8087` protected by Argon2id authentication.
-  - **Bot Messages**: Unified editor for Welcome (`/start`), Help (`/help`), and Must-Join message templates with HTML parse-mode validation.
-  - **Engine & Limits**: Consolidated settings for media rules, file size limits, and storage quotas without duplicated inputs.
+  - **Bot Messages**: Unified editor for Welcome (`/start`), About (`/about`), and Must-Join message templates with HTML parse-mode validation.
+  - **Engine & Limits**: Consolidated settings for media rules, file size limits, max clip duration (default 15m), and storage quotas.
   - **Queue & Job Management**: Live progress monitoring with one-click "Clear Queue" and "Clear Jobs" actions.
   - **User Management**: Search users, ban/unban, view stats, and permanently delete users with cascading cleanup.
   - **System Diagnostics & Logs**: Real-time structured log streaming, service health checks, and Prometheus `/metrics`.

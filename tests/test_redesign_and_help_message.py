@@ -63,16 +63,23 @@ async def test_help_message_api():
         assert res_reset.status_code == 200
         assert res_reset.json()["status"] == "reset"
 
+        # GET about-message
+        res_about = await client.get("/api/telegram/about-message")
+        assert res_about.status_code == 200
+        assert "Farzad" in res_about.json()["message"]
+
 
 @pytest.mark.asyncio
-async def test_cmd_help_handler():
+async def test_cmd_help_and_about_handler():
+    from src.bot.handlers.base import cmd_about
     message = MagicMock()
     message.answer = AsyncMock()
 
-    await cmd_help(message)
+    await cmd_about(message)
     message.answer.assert_called_once()
     sent_text = message.answer.call_args[0][0]
-    assert "Youtube Overdose" in sent_text or "Help" in sent_text
+    assert "Farzad" in sent_text
+    assert "Youtube Overdose" in sent_text
 
 
 def test_ytdlp_144p_cutoff():

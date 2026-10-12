@@ -48,6 +48,7 @@ SETTING_CONFIG_VERSION = "telegram_config_version"
 SETTING_MUST_JOIN_MSG = "must_join_message"
 SETTING_WELCOME_MSG = "welcome_message"
 SETTING_HELP_MSG = "help_message"
+SETTING_ABOUT_MSG = "about_message"
 SETTING_UNSUPPORTED_LINK_MSG = "unsupported_link_message"
 
 # Application Setting Keys
@@ -157,14 +158,14 @@ DEFAULT_WELCOME_MESSAGE = (
     "Just paste any YouTube link below to start!"
 )
 
-DEFAULT_HELP_MESSAGE = (
-    "📖 <b>How to use Youtube Overdose:</b>\n\n"
-    "1. 🔗 <b>Send a Link:</b> Paste any YouTube video or Shorts URL in the chat.\n"
-    "2. 🎛 <b>Select Quality:</b> Choose your preferred resolution (144p–4K), 💿 MP3 audio, or 💬 Subtitles.\n"
-    "3. ⚡ <b>Instant Delivery:</b> The bot delivers the media with original aspect ratio and cleans up progress messages.\n"
-    "4. ❌ <b>Cancel Anytime:</b> Use the Cancel button on the menu to dismiss unwanted requests.\n\n"
-    "💡 <i>Tip: Send /start anytime to view the main welcome menu.</i>"
+DEFAULT_ABOUT_MESSAGE = (
+    "🤖 <b>About Youtube Overdose</b>\n\n"
+    "Crafted with ❤️ by <b>Farzad</b>.\n\n"
+    "<i>\"I download videos faster than my creator makes life decisions.\"</i> ⚡️\n\n"
+    "Just send any YouTube link to start downloading!"
 )
+
+DEFAULT_HELP_MESSAGE = DEFAULT_ABOUT_MESSAGE
 
 DEFAULT_UNSUPPORTED_LINK_MESSAGE = (
     "❌ <b>Unsupported Link:</b> Please send a valid YouTube video or Shorts link."
@@ -1457,19 +1458,26 @@ class SettingService:
                 await sess.close()
 
     @classmethod
-    async def get_help_message(cls, session: Optional[AsyncSession] = None) -> str:
-        """Get the active help message template for /help."""
-        custom_msg = await cls.get_active_setting(SETTING_HELP_MSG, session)
-        return custom_msg if custom_msg else DEFAULT_HELP_MESSAGE
+    async def get_about_message(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get the active about message template for /about (and /help)."""
+        custom_msg = await cls.get_active_setting(SETTING_ABOUT_MSG, session)
+        if not custom_msg:
+            custom_msg = await cls.get_active_setting(SETTING_HELP_MSG, session)
+        return custom_msg if custom_msg else DEFAULT_ABOUT_MESSAGE
 
     @classmethod
-    async def save_help_message(
+    async def get_help_message(cls, session: Optional[AsyncSession] = None) -> str:
+        """Get the active help/about message template."""
+        return await cls.get_about_message(session)
+
+    @classmethod
+    async def save_about_message(
         cls,
         message: str,
         session: Optional[AsyncSession] = None,
         admin_username: str = "admin",
     ) -> str:
-        """Validate and save a custom help message template for /help."""
+        """Validate and save a custom about message template for /about and /help."""
         clean_msg = message.strip()
         is_valid, err = validate_telegram_html(clean_msg)
         if not is_valid:
@@ -1481,23 +1489,61 @@ class SettingService:
         own_session = session is None
         sess = session or AsyncSessionLocal()
         try:
-            stmt = select(Setting).where(Setting.key == SETTING_HELP_MSG, Setting.status == "ACTIVE")
+            stmt = select(Setting).where(
+                Setting.key.in_([SETTING_ABOUT_MSG, SETTING_HELP_MSG]),
+                Setting.status == "ACTIVE"
+            )
             res = await sess.execute(stmt)
-            item = res.scalar_one_or_none()
-            if item:
-                item.value = clean_msg
+            items = res.scalars().all()
+            if items:
+                for item in items:
+                    item.value = clean_msg
             else:
                 sess.add(
                     Setting(
-                        key=SETTING_HELP_MSG,
+                        key=SETTING_ABOUT_MSG,
                         status="ACTIVE",
                         value=clean_msg,
                         is_encrypted=False,
-                        description="Custom Telegram Bot Help Message Template",
+                        description="Custom Telegram Bot About Message Template",
                     )
                 )
             await sess.commit()
             return clean_msg
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            if own_session:
+                await sess.close()
+
+    @classmethod
+    async def save_help_message(
+        cls,
+        message: str,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        return await cls.save_about_message(message, session, admin_username)
+
+    @classmethod
+    async def reset_about_message(
+        cls,
+        session: Optional[AsyncSession] = None,
+        admin_username: str = "admin",
+    ) -> str:
+        """Reset the /about and /help message to system default."""
+        own_session = session is None
+        sess = session or AsyncSessionLocal()
+        try:
+            await sess.execute(
+                delete(Setting).where(
+                    Setting.key.in_([SETTING_ABOUT_MSG, SETTING_HELP_MSG]),
+                    Setting.status == "ACTIVE"
+                )
+            )
+            await sess.commit()
+            return DEFAULT_ABOUT_MESSAGE
         except Exception:
             await sess.rollback()
             raise
@@ -1511,21 +1557,7 @@ class SettingService:
         session: Optional[AsyncSession] = None,
         admin_username: str = "admin",
     ) -> str:
-        """Reset the /help message to system default."""
-        own_session = session is None
-        sess = session or AsyncSessionLocal()
-        try:
-            await sess.execute(
-                delete(Setting).where(Setting.key == SETTING_HELP_MSG, Setting.status == "ACTIVE")
-            )
-            await sess.commit()
-            return DEFAULT_HELP_MESSAGE
-        except Exception:
-            await sess.rollback()
-            raise
-        finally:
-            if own_session:
-                await sess.close()
+        return await cls.reset_about_message(session, admin_username)
 
     @classmethod
     async def get_unsupported_link_message(cls, session: Optional[AsyncSession] = None) -> str:
