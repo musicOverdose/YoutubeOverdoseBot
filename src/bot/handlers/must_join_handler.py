@@ -58,11 +58,11 @@ async def on_must_join_check_again(callback: CallbackQuery, bot: Bot):
             return
 
         # User is AUTHORIZED!
-        await callback.answer("✅ Membership verified! Thank you.", show_alert=False)
+        await callback.answer("✅ Verified!", show_alert=False)
         if callback.message:
             try:
                 await callback.message.edit_text(
-                    "✅ <b>Membership verified successfully!</b>",
+                    "✅ <b>Joined!</b>",
                     parse_mode=ParseMode.HTML,
                 )
             except Exception:

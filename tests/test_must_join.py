@@ -177,7 +177,7 @@ def test_must_join_keyboard_structure():
     Verifies that build_must_join_keyboard builds:
     - One URL button per channel pointing to configured invite/public URL
     - Explicit fallback button for channels missing URLs
-    - Final 'I Joined — Check Again' callback button strictly using 'must_join:check'
+    - Final '✅ I Joined' callback button strictly using 'must_join:check'
     """
     from src.bot.keyboards import build_must_join_keyboard
 
@@ -203,7 +203,7 @@ def test_must_join_keyboard_structure():
     assert buttons[2][0].callback_data == "must_join:no_url"
 
     # Final button: strictly fixed callback
-    assert buttons[3][0].text == "I Joined — Check Again"
+    assert buttons[3][0].text == "✅ I Joined"
     assert buttons[3][0].callback_data == "must_join:check"
 
 

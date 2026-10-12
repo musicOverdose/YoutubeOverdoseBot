@@ -243,7 +243,7 @@ def build_must_join_keyboard(
             ])
 
     keyboard.append([
-        InlineKeyboardButton(text="I Joined — Check Again", callback_data="must_join:check")
+        InlineKeyboardButton(text="✅ I Joined", callback_data="must_join:check")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
