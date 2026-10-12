@@ -63,15 +63,19 @@ async def enqueue_audio_job(
             return
 
         # 2. EXACT CACHE LOOKUP
-        cache_key = CacheService.generate_cache_key(
-            source_id=source_id,
-            operation=OperationType.AUDIO.value,
-            codec="MP3",
-            clip_start=clip_start,
-            clip_end=clip_end,
-        )
+        is_audio_clip = (clip_start is not None and clip_end is not None)
+        cached_entry = None
+        if not is_audio_clip:
+            cache_key = CacheService.generate_cache_key(
+                source_id=source_id,
+                operation=OperationType.AUDIO.value,
+                codec="MP3",
+            )
+            cached_entry = await CacheService.get_cached_entry(session, cache_key)
+        else:
+            # Audio clips are transient and never cached or served from cache
+            cache_key = f"nocache:{uuid.uuid4().hex}"
 
-        cached_entry = await CacheService.get_cached_entry(session, cache_key)
         if cached_entry:
             delivered, err = await CacheService.deliver_cached_media(
                 bot, session, cached_entry, chat_id

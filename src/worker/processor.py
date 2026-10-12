@@ -22,6 +22,7 @@ from src.core.constants import (
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.core.redis import get_redis_client
+from src.models.cache import CacheEntry
 from src.models.job import Job
 from src.models.job_request import JobRequest
 from src.models.setting import Setting
@@ -34,7 +35,7 @@ from src.services.setting_service import SettingService
 from src.services.system_service import SystemService
 from src.services.thumbnail_service import ThumbnailService
 from src.services.ytdlp_service import YtDlpService, YouTubeSubtitleRateLimitError
-from src.utils.timestamp_parser import format_clip_filename_tag, format_timestamp
+from src.utils.timestamp_parser import format_caption_timestamp, format_clip_filename_tag, format_timestamp
 from src.worker.notifier import StatusNotifier
 from src.worker.telegram_factory import TelegramClientFactory
 
@@ -364,7 +365,7 @@ class JobProcessor:
                         clip_status = f" • Clip ({format_timestamp(job.clip_start)} - {format_timestamp(job.clip_end)})"
                     if is_muted:
                         clip_status += " • Muted"
-                    await notifier.update_unified_progress(5.0, subtitle="Starting...", force=True)
+                    notifier.start_ticker(initial_pct=5.0)
 
                     logger.info(
                         "OPERATION: DOWNLOAD + REMUX for job %s (resolution=%dp, codec=%s, is_clip=%s, is_muted=%s)",
@@ -402,18 +403,17 @@ class JobProcessor:
                     def progress_hook(d):
                         try:
                             if d.get("status") == "downloading":
-                                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
+                                total = d.get("total_bytes") or d.get("total_bytes_estimate")
                                 downloaded = d.get("downloaded_bytes", 0)
-                                pct = (downloaded / total) * 100
-                                overall_pct = 5.0 + (pct * 0.80)
+                                if total and total > 0:
+                                    pct = (downloaded / total) * 100
+                                elif d.get("fragment_count") and d.get("fragment_count") > 0:
+                                    pct = (d.get("fragment_index", 0) / d.get("fragment_count")) * 100
+                                else:
+                                    pct = 50.0
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
-                                asyncio.run_coroutine_threadsafe(
-                                    notifier.update_unified_progress(
-                                        overall_pct, speed=speed, eta=eta
-                                    ),
-                                    loop,
-                                )
+                                notifier.on_download_progress(pct, speed=speed, eta=eta)
                         except Exception as pe:
                             logger.debug("Progress hook update error: %s", pe)
 
@@ -424,7 +424,10 @@ class JobProcessor:
                             ydl.download([job.canonical_url])
                     await loop.run_in_executor(None, _dl)
 
+                    notifier.set_stage("process")
+
                     if await QueueService.is_cancelled(job_id):
+                        await notifier.stop_ticker()
                         job.status = JobStatus.CANCELLED.value
                         await session.commit()
                         return
@@ -536,7 +539,7 @@ class JobProcessor:
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
-                    await notifier.update_unified_progress(88.0, subtitle="Processing media...", force=True)
+                    notifier.set_stage("process")
 
                     output_file = os.path.join(job_dir, "output.mp4")
                     process_ok = await FFmpegService.process_video(
@@ -607,12 +610,12 @@ class JobProcessor:
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
-                    await notifier.update_unified_progress(95.0, subtitle="Uploading to Telegram...", force=True)
+                    notifier.set_stage("upload")
 
                     disp_res = format_video_caption_resolution(job.resolution, target_height)
                     tag_parts = [disp_res] if disp_res else []
                     if is_clip:
-                        tag_parts.append(f"{format_timestamp(job.clip_start)} ➔ {format_timestamp(job.clip_end)}")
+                        tag_parts.append(f"{format_caption_timestamp(job.clip_start)} ➔ {format_caption_timestamp(job.clip_end)}")
                     if is_muted:
                         tag_parts.append("Muted")
                     meta_str = " • ".join(tag_parts)
@@ -644,19 +647,27 @@ class JobProcessor:
                         extra_kwargs=extra_kwargs,
                     )
 
-                    cache_entry = await CacheService.save_cache_entry(
-                        session=session,
-                        cache_key=job.cache_key,
-                        source_id=job.source_id,
-                        title=job.title,
-                        operation=job.operation,
-                        codec=target_codec,
-                        resolution=job.resolution,
-                        height=target_height,
-                        file_size=file_size,
-                        telegram_channel_id=cache_channel_id,
-                        telegram_message_id=uploaded_msg_id,
-                    )
+                    if not is_clip:
+                        cache_entry = await CacheService.save_cache_entry(
+                            session=session,
+                            cache_key=job.cache_key,
+                            source_id=job.source_id,
+                            title=job.title,
+                            operation=job.operation,
+                            codec=target_codec,
+                            resolution=job.resolution,
+                            height=target_height,
+                            file_size=file_size,
+                            telegram_channel_id=cache_channel_id,
+                            telegram_message_id=uploaded_msg_id,
+                        )
+                    else:
+                        cache_entry = CacheEntry(
+                            telegram_channel_id=cache_channel_id,
+                            telegram_message_id=uploaded_msg_id,
+                        )
+
+                    await notifier.stop_ticker()
 
                 # ==========================================
                 # PIPELINE: AUDIO (MP3) PROCESSING
@@ -665,7 +676,7 @@ class JobProcessor:
                     is_audio_clip = (job.clip_start is not None and job.clip_end is not None)
                     job.status = JobStatus.DOWNLOADING.value
                     await session.commit()
-                    await notifier.update_unified_progress(5.0, subtitle="Starting...", force=True)
+                    notifier.start_ticker(initial_pct=5.0)
 
                     # Extract video metadata to get rich audio tags (artist, title, upload_date, etc.)
                     meta_info = {}
@@ -701,18 +712,17 @@ class JobProcessor:
                     def progress_hook_audio(d):
                         try:
                             if d.get("status") == "downloading":
-                                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
+                                total = d.get("total_bytes") or d.get("total_bytes_estimate")
                                 downloaded = d.get("downloaded_bytes", 0)
-                                pct = (downloaded / total) * 100
-                                overall_pct = 5.0 + (pct * 0.80)
+                                if total and total > 0:
+                                    pct = (downloaded / total) * 100
+                                elif d.get("fragment_count") and d.get("fragment_count") > 0:
+                                    pct = (d.get("fragment_index", 0) / d.get("fragment_count")) * 100
+                                else:
+                                    pct = 50.0
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
-                                asyncio.run_coroutine_threadsafe(
-                                    notifier.update_unified_progress(
-                                        overall_pct, speed=speed, eta=eta
-                                    ),
-                                    loop,
-                                )
+                                notifier.on_download_progress(pct, speed=speed, eta=eta)
                         except Exception as pe:
                             logger.debug("Audio progress hook error: %s", pe)
 
@@ -722,6 +732,8 @@ class JobProcessor:
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             ydl.download([job.canonical_url])
                     await loop.run_in_executor(None, _dl_audio)
+
+                    notifier.set_stage("process")
 
                     audio_files = [f for f in glob.glob(os.path.join(job_dir, "audio.*")) if not f.endswith((".jpg", ".webp", ".png"))]
                     if not audio_files:
@@ -753,7 +765,7 @@ class JobProcessor:
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
-                    await notifier.update_unified_progress(88.0, subtitle="Processing audio...", force=True)
+                    notifier.set_stage("process")
 
                     output_mp3 = os.path.join(job_dir, "output.mp3")
                     mp3_ok = await FFmpegService.extract_mp3(
@@ -770,13 +782,14 @@ class JobProcessor:
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
-                    await notifier.update_unified_progress(95.0, subtitle="Uploading to Telegram...", force=True)
+                    notifier.set_stage("upload")
 
                     tg_thumbnail = FSInputFile(cover_jpg_path) if os.path.exists(cover_jpg_path) else None
 
-                    audio_caption = None
                     if is_audio_clip:
-                        audio_caption = f"🎵 <b>{audio_title}</b>\n(Clip • {format_timestamp(job.clip_start)} ➔ {format_timestamp(job.clip_end)})"
+                        audio_caption = f"(MP3 • {format_caption_timestamp(job.clip_start)} ➔ {format_caption_timestamp(job.clip_end)})"
+                    else:
+                        audio_caption = "(MP3)"
 
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
@@ -793,17 +806,25 @@ class JobProcessor:
                         thumbnail=tg_thumbnail,
                     )
 
-                    cache_entry = await CacheService.save_cache_entry(
-                        session=session,
-                        cache_key=job.cache_key,
-                        source_id=job.source_id,
-                        title=audio_title,
-                        operation=job.operation,
-                        codec="MP3",
-                        file_size=file_size,
-                        telegram_channel_id=cache_channel_id,
-                        telegram_message_id=uploaded_msg_id,
-                    )
+                    if not is_audio_clip:
+                        cache_entry = await CacheService.save_cache_entry(
+                            session=session,
+                            cache_key=job.cache_key,
+                            source_id=job.source_id,
+                            title=audio_title,
+                            operation=job.operation,
+                            codec="MP3",
+                            file_size=file_size,
+                            telegram_channel_id=cache_channel_id,
+                            telegram_message_id=uploaded_msg_id,
+                        )
+                    else:
+                        cache_entry = CacheEntry(
+                            telegram_channel_id=cache_channel_id,
+                            telegram_message_id=uploaded_msg_id,
+                        )
+
+                    await notifier.stop_ticker()
 
                 # ==========================================
                 # PIPELINE: SUBTITLE PROCESSING
@@ -1157,6 +1178,12 @@ class JobProcessor:
                     await notifier.update("❌", "Failed", f"Error: {err_str[:300]}", force=True)
 
             finally:
+                if notifier is not None:
+                    try:
+                        await notifier.stop_ticker()
+                    except Exception:
+                        pass
+
                 if own_bot and bot is not None:
                     try:
                         await bot.session.close()

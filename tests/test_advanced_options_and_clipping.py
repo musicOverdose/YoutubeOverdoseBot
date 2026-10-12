@@ -368,3 +368,77 @@ class TestClipPrecisionAndProgress:
         assert opts.get("clip_end") is None
         assert opts.get("is_muted") is False
         assert opts.get("mode") == "video"
+
+    def test_caption_timestamp_non_clickable(self):
+        from src.utils.timestamp_parser import format_caption_timestamp, format_timestamp
+        # Standard ASCII format has colon
+        standard = format_timestamp(83)
+        assert standard == "01:23"
+        assert ":" in standard
+
+        # Caption format has Unicode ratio (U+2236) to prevent Telegram seekable links
+        caption_ts = format_caption_timestamp(83)
+        assert caption_ts == "01∶23"
+        assert ":" not in caption_ts
+        assert "∶" in caption_ts
+        assert ord("∶") == 0x2236
+
+    @pytest.mark.asyncio
+    async def test_smooth_ticker_lifecycle(self):
+        from src.worker.notifier import StatusNotifier
+        bot_mock = AsyncMock()
+        notifier = StatusNotifier(bot=bot_mock, requests=[{"chat_id": 12345, "message_id": 999}])
+
+        # Start ticker
+        notifier.start_ticker(initial_pct=5.0)
+        assert notifier.current_pct == 5.0
+        assert notifier.current_stage == "download"
+
+        # Update download progress
+        notifier.on_download_progress(50.0, speed="10 MB/s", eta="00:03")
+        assert notifier.target_pct >= 30.0
+        assert notifier.current_speed == "10 MB/s"
+        assert notifier.current_eta == "00:03"
+
+        # Switch to process stage
+        notifier.set_stage("process")
+        assert notifier.current_stage == "process"
+        assert notifier.current_speed == ""
+        assert notifier.current_eta == ""
+        assert notifier.target_pct >= 88.0
+
+        # Switch to upload stage
+        notifier.set_stage("upload")
+        assert notifier.current_stage == "upload"
+        assert notifier.target_pct >= 97.0
+
+        # Stop ticker
+        await notifier.stop_ticker()
+        assert notifier._ticker_task is None
+
+    @pytest.mark.asyncio
+    async def test_clip_cache_bypass(self):
+        from src.models.cache import CacheEntry
+        from src.services.cache_service import CacheService
+        bot_mock = AsyncMock()
+        session_mock = AsyncMock()
+
+        # Transient entry (not stored in DB, id is None)
+        transient = CacheEntry(
+            telegram_channel_id=-1001234567,
+            telegram_message_id=42,
+        )
+        assert transient.id is None
+
+        delivered, err = await CacheService.deliver_cached_media(
+            bot=bot_mock,
+            session=session_mock,
+            cache_entry=transient,
+            target_chat_id=98765,
+        )
+        assert delivered is True
+        assert err is None
+        assert bot_mock.copy_message.called
+        # Verify session.execute (which updates hit_count on DB row) was NOT called because id is None
+        assert not session_mock.execute.called
+

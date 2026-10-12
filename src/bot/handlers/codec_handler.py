@@ -203,17 +203,21 @@ async def enqueue_video_job(
             return
 
         # 4. EXACT CACHE KEY GENERATION & CACHE LOOKUP
-        cache_key = CacheService.generate_cache_key(
-            source_id=source_id,
-            operation=OperationType.VIDEO.value,
-            codec=codec,
-            height=height,
-            clip_start=clip_start,
-            clip_end=clip_end,
-            is_muted=is_muted,
-        )
+        is_clip = (clip_start is not None and clip_end is not None)
+        cached_entry = None
+        if not is_clip:
+            cache_key = CacheService.generate_cache_key(
+                source_id=source_id,
+                operation=OperationType.VIDEO.value,
+                codec=codec,
+                height=height,
+                is_muted=is_muted,
+            )
+            cached_entry = await CacheService.get_cached_entry(session, cache_key)
+        else:
+            # Clips are transient and never cached or served from cache
+            cache_key = f"nocache:{uuid.uuid4().hex}"
 
-        cached_entry = await CacheService.get_cached_entry(session, cache_key)
         if cached_entry:
             # CACHE HIT: Instant delivery via copyMessage!
             # Bypasses queue, worker, yt-dlp, FFmpeg, and temp disk

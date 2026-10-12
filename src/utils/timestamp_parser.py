@@ -151,3 +151,12 @@ def format_timestamp(seconds: int) -> str:
 def format_clip_filename_tag(seconds: int) -> str:
     """Formats seconds into filename-safe tag, e.g. '01.23' or '01.15.30'."""
     return format_timestamp(seconds).replace(":", ".")
+
+
+def format_caption_timestamp(seconds: int) -> str:
+    """
+    Formats integer seconds for Telegram media captions without triggering
+    Telegram's clickable timecode seek event (replaces ASCII ':' with Unicode ratio '∶' U+2236).
+    """
+    return format_timestamp(seconds).replace(":", "∶")
+

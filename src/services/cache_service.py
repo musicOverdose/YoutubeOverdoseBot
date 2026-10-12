@@ -90,31 +90,33 @@ class CacheService:
                 message_id=cache_entry.telegram_message_id,
             )
 
-            # Update hit count and timestamp
-            await session.execute(
-                update(CacheEntry)
-                .where(CacheEntry.id == cache_entry.id)
-                .values(
-                    hit_count=CacheEntry.hit_count + 1,
-                    last_used_at=datetime.now(timezone.utc),
+            # Update hit count and timestamp if entry is persisted in DB
+            if getattr(cache_entry, "id", None) is not None:
+                await session.execute(
+                    update(CacheEntry)
+                    .where(CacheEntry.id == cache_entry.id)
+                    .values(
+                        hit_count=CacheEntry.hit_count + 1,
+                        last_used_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
-            await session.commit()
+                await session.commit()
             return True, None
 
         except TelegramBadRequest as e:
             err_msg = str(e).lower()
             if "message to copy not found" in err_msg or "chat not found" in err_msg:
-                # Invalidate stale cache record
-                logger.warning(
-                    f"Cache message {cache_entry.telegram_message_id} in channel {cache_entry.telegram_channel_id} not found. Invalidating cache {cache_entry.cache_key}"
-                )
-                await session.execute(
-                    update(CacheEntry)
-                    .where(CacheEntry.id == cache_entry.id)
-                    .values(is_valid=False)
-                )
-                await session.commit()
+                # Invalidate stale cache record if persisted
+                if getattr(cache_entry, "id", None) is not None:
+                    logger.warning(
+                        f"Cache message {cache_entry.telegram_message_id} in channel {cache_entry.telegram_channel_id} not found. Invalidating cache {cache_entry.cache_key}"
+                    )
+                    await session.execute(
+                        update(CacheEntry)
+                        .where(CacheEntry.id == cache_entry.id)
+                        .values(is_valid=False)
+                    )
+                    await session.commit()
                 return False, "Cached Telegram message was removed. Re-generating..."
             return False, f"Telegram delivery error: {e}"
 
