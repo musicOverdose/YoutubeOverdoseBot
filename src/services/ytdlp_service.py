@@ -526,6 +526,14 @@ class YtDlpService:
                         labels[h] = f"{w}p"
                 elif h not in labels:
                     labels[h] = f"{h}p"
+
+        # Simplify resolution labels: 2160p -> 4K, 1440p -> 2K
+        for h, lbl in list(labels.items()):
+            if lbl == "2160p" or h == 2160:
+                labels[h] = "4K"
+            elif lbl == "1440p" or h == 1440:
+                labels[h] = "2K"
+
         return labels
 
     @classmethod
@@ -625,16 +633,18 @@ class YtDlpService:
         info: Dict[str, Any],
         target_height: int,
         target_codec: str,
+        clip_duration: Optional[int] = None,
+        is_muted: bool = False,
     ) -> Tuple[int, str, Dict[str, Any]]:
         """
         Simulates yt-dlp's exact format selector to determine the exact video and audio
         formats that will be selected during real download, and calculates the expected
-        final output file size (in bytes).
+        final output file size (in bytes). Supports clip_duration and is_muted.
 
         Returns: (expected_final_bytes, size_source, details)
         size_source is one of: "exact", "approximate", "estimated".
         """
-        format_spec = cls.build_video_format_spec(target_height, target_codec)
+        format_spec = cls.build_video_format_spec(target_height, target_codec, is_muted=is_muted)
         ydl_opts = cls.get_base_opts()
         ydl_opts["format"] = format_spec
 
@@ -689,31 +699,49 @@ class YtDlpService:
         orig_v = orig_formats.get(str(v_fmt.get("format_id")), v_fmt) if v_fmt else {}
         orig_a = orig_formats.get(str(a_fmt.get("format_id")), a_fmt) if a_fmt else {}
 
-        duration = float(info.get("duration") or selected.get("duration") or 0.0)
+        total_duration = float(info.get("duration") or selected.get("duration") or 0.0)
+        is_clip = (clip_duration is not None and clip_duration > 0)
+        duration = float(clip_duration) if is_clip else total_duration
 
         # 1. Video Size Calculation
         v_size = 0
         v_source = "estimated"
-        if orig_v.get("filesize") and orig_v["filesize"] > 0:
-            v_size = int(orig_v["filesize"])
-            v_source = "exact"
-        elif orig_v.get("filesize_approx") and orig_v["filesize_approx"] > 0:
-            v_size = int(orig_v["filesize_approx"])
-            v_source = "approximate"
-        elif v_fmt:
-            if v_fmt.get("filesize") and v_fmt["filesize"] > 0:
-                v_size = int(v_fmt["filesize"])
-                v_source = "exact"
-            elif v_fmt.get("filesize_approx") and v_fmt["filesize_approx"] > 0:
-                v_size = int(v_fmt["filesize_approx"])
-                v_source = "estimated"
+        v_bitrate = v_fmt.get("vbr") or v_fmt.get("tbr") or 0.0 if v_fmt else 0.0
+
+        if is_clip:
+            v_source = "estimated"
+            if v_bitrate > 0:
+                v_size = int((float(v_bitrate) * 1000 / 8) * duration)
+            elif orig_v.get("filesize") and total_duration > 0:
+                v_size = int(orig_v["filesize"] * (duration / total_duration))
+            elif orig_v.get("filesize_approx") and total_duration > 0:
+                v_size = int(orig_v["filesize_approx"] * (duration / total_duration))
+            elif v_fmt and v_fmt.get("filesize") and total_duration > 0:
+                v_size = int(v_fmt["filesize"] * (duration / total_duration))
+            elif v_fmt and v_fmt.get("filesize_approx") and total_duration > 0:
+                v_size = int(v_fmt["filesize_approx"] * (duration / total_duration))
             else:
-                v_bitrate = v_fmt.get("vbr") or v_fmt.get("tbr") or 0.0
-                if v_bitrate > 0 and duration > 0:
-                    v_size = int((float(v_bitrate) * 1000 / 8) * duration)
+                v_size = 0
+        else:
+            if orig_v.get("filesize") and orig_v["filesize"] > 0:
+                v_size = int(orig_v["filesize"])
+                v_source = "exact"
+            elif orig_v.get("filesize_approx") and orig_v["filesize_approx"] > 0:
+                v_size = int(orig_v["filesize_approx"])
+                v_source = "approximate"
+            elif v_fmt:
+                if v_fmt.get("filesize") and v_fmt["filesize"] > 0:
+                    v_size = int(v_fmt["filesize"])
+                    v_source = "exact"
+                elif v_fmt.get("filesize_approx") and v_fmt["filesize_approx"] > 0:
+                    v_size = int(v_fmt["filesize_approx"])
+                    v_source = "estimated"
                 else:
-                    v_size = 0
-                v_source = "estimated"
+                    if v_bitrate > 0 and duration > 0:
+                        v_size = int((float(v_bitrate) * 1000 / 8) * duration)
+                    else:
+                        v_size = 0
+                    v_source = "estimated"
 
         # 2. Audio Size Calculation
         a_size = 0
@@ -721,8 +749,11 @@ class YtDlpService:
         audio_copied = True
         a_codec_name = (a_fmt.get("acodec") or "").lower() if a_fmt else "none"
 
-        # Check if audio is AAC (or combined format where v_fmt == a_fmt)
-        if a_fmt is None or (v_fmt is a_fmt and a_fmt.get("acodec") != "none"):
+        if is_muted:
+            a_size = 0
+            a_source = "exact"
+            audio_copied = True
+        elif a_fmt is None or (v_fmt is a_fmt and a_fmt.get("acodec") != "none"):
             # Combined format: entire stream size accounted for in v_size
             a_size = 0
             a_source = v_source
@@ -736,25 +767,35 @@ class YtDlpService:
             if is_aac:
                 # AAC: stream-copied (-c:a copy)
                 audio_copied = True
-                if orig_a.get("filesize") and orig_a["filesize"] > 0:
-                    a_size = int(orig_a["filesize"])
-                    a_source = "exact"
-                elif orig_a.get("filesize_approx") and orig_a["filesize_approx"] > 0:
-                    a_size = int(orig_a["filesize_approx"])
-                    a_source = "approximate"
-                elif a_fmt.get("filesize") and a_fmt["filesize"] > 0:
-                    a_size = int(a_fmt["filesize"])
-                    a_source = "exact"
-                elif a_fmt.get("filesize_approx") and a_fmt["filesize_approx"] > 0:
-                    a_size = int(a_fmt["filesize_approx"])
+                if is_clip:
                     a_source = "estimated"
-                else:
                     a_bitrate = a_fmt.get("abr") or a_fmt.get("tbr") or 128.0
-                    if a_bitrate > 0 and duration > 0:
+                    if a_bitrate > 0:
                         a_size = int((float(a_bitrate) * 1000 / 8) * duration)
+                    elif orig_a.get("filesize") and total_duration > 0:
+                        a_size = int(orig_a["filesize"] * (duration / total_duration))
                     else:
                         a_size = int((128 * 1000 / 8) * duration)
-                    a_source = "estimated"
+                else:
+                    if orig_a.get("filesize") and orig_a["filesize"] > 0:
+                        a_size = int(orig_a["filesize"])
+                        a_source = "exact"
+                    elif orig_a.get("filesize_approx") and orig_a["filesize_approx"] > 0:
+                        a_size = int(orig_a["filesize_approx"])
+                        a_source = "approximate"
+                    elif a_fmt.get("filesize") and a_fmt["filesize"] > 0:
+                        a_size = int(a_fmt["filesize"])
+                        a_source = "exact"
+                    elif a_fmt.get("filesize_approx") and a_fmt["filesize_approx"] > 0:
+                        a_size = int(a_fmt["filesize_approx"])
+                        a_source = "estimated"
+                    else:
+                        a_bitrate = a_fmt.get("abr") or a_fmt.get("tbr") or 128.0
+                        if a_bitrate > 0 and duration > 0:
+                            a_size = int((float(a_bitrate) * 1000 / 8) * duration)
+                        else:
+                            a_size = int((128 * 1000 / 8) * duration)
+                        a_source = "estimated"
             else:
                 # Non-AAC: transcoded to AAC 192 kbps (-c:a aac -b:a 192k)
                 audio_copied = False
@@ -793,13 +834,44 @@ class YtDlpService:
         return expected_final_size, overall_source, details
 
     @classmethod
-    def build_video_format_spec(cls, target_height: int, target_codec: Optional[str] = None) -> str:
+    def build_video_format_spec(
+        cls,
+        target_height: int,
+        target_codec: Optional[str] = None,
+        is_muted: bool = False,
+    ) -> str:
         """
         Builds yt-dlp format selector.
         Prioritizes exact target_height and target_codec with compatible AAC audio (ext=m4a).
-        Includes robust fallbacks so that if a specific stream is unavailable,
-        it smoothly downloads the best stream at that target height or below without failing.
+        If is_muted=True, only selects video streams without downloading audio.
         """
+        if is_muted:
+            if not target_codec:
+                return (
+                    f"bestvideo[height={target_height}]/"
+                    f"bestvideo[height<={target_height}]/"
+                    f"best[height={target_height}]/"
+                    f"best[height<={target_height}]"
+                )
+            codec_upper = target_codec.upper()
+            if codec_upper == "H264":
+                vfilter = "vcodec~='(?i)^(avc1|h264)'"
+            elif codec_upper == "H265":
+                vfilter = "vcodec~='(?i)^(hev1|hvc1|hevc|h265)'"
+            elif codec_upper == "VP9":
+                vfilter = "vcodec~='(?i)^(vp09|vp9)'"
+            elif codec_upper == "AV1":
+                vfilter = "vcodec~='(?i)^(av01|av1)'"
+            else:
+                raise ValueError(f"Unsupported target codec: {target_codec}")
+
+            return (
+                f"bestvideo[height={target_height}][{vfilter}]/"
+                f"bestvideo[height<={target_height}][{vfilter}]/"
+                f"bestvideo[height={target_height}]/"
+                f"best[height={target_height}]"
+            )
+
         if not target_codec:
             return (
                 f"bestvideo[height={target_height}]+bestaudio[ext=m4a]/"

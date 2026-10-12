@@ -19,7 +19,13 @@ def build_quality_keyboard(
     # Pair video resolutions two per row
     row: List[InlineKeyboardButton] = []
     for height in available_heights:
-        label = labels.get(height, f"{height}p")
+        raw_label = labels.get(height, f"{height}p")
+        if raw_label in ("2160p", "4K") or height == 2160:
+            label = "4K"
+        elif raw_label in ("1440p", "2K") or height == 1440:
+            label = "2K"
+        else:
+            label = raw_label
         btn = InlineKeyboardButton(
             text=f"🎬 {label}",
             callback_data=f"q:{source_id}:{height}",
@@ -44,11 +50,96 @@ def build_quality_keyboard(
         InlineKeyboardButton(text="📝 Description", callback_data=f"desc:{source_id}"),
     ])
 
+    # Advanced options button
+    keyboard.append([
+        InlineKeyboardButton(text="🎛 Advanced Options", callback_data=f"adv_menu:{source_id}"),
+    ])
+
     # Cancel request button
     keyboard.append([
         InlineKeyboardButton(text="❌ Cancel", callback_data="req_cancel"),
     ])
 
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_advanced_options_keyboard(
+    source_id: str,
+    clip_start: Optional[int] = None,
+    clip_end: Optional[int] = None,
+    is_muted: bool = False,
+    mode: str = "video",
+) -> InlineKeyboardMarkup:
+    """
+    ADVANCED OPTIONS CONFIGURATOR KEYBOARD:
+    [ ⏱ Set Timestamp Range ]
+    [ 🔇 Mute Audio: OFF/ON ]   [ 📦 Mode: 🎬 Video / 💿 MP3 ]
+    [ 🔄 Reset Options ]
+    [ ☑️ Finish ]
+    [ 🔙 Back to Menu ]
+    """
+    mode_text = "🎬 Video" if mode == "video" else "💿 MP3"
+    if mode == "mp3":
+        mute_text = "🔇 Mute: N/A"
+    else:
+        mute_text = "🔇 Mute: ON" if is_muted else "🔇 Mute: OFF"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(text="⏱ Set Timestamp Range", callback_data=f"adv_time:{source_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=mute_text, callback_data=f"adv_mute:{source_id}"),
+            InlineKeyboardButton(text=f"📦 Mode: {mode_text}", callback_data=f"adv_mode:{source_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Reset Options", callback_data=f"adv_undo:{source_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="☑️ Finish", callback_data=f"adv_finish:{source_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back to Menu", callback_data=f"adv_back:{source_id}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_advanced_quality_keyboard(
+    source_id: str,
+    available_heights: List[int],
+    resolution_labels: Optional[dict] = None,
+) -> InlineKeyboardMarkup:
+    """
+    QUALITY SELECTION FOR ADVANCED CLIP:
+    Displays available resolutions + Back to Options button.
+    """
+    keyboard: List[List[InlineKeyboardButton]] = []
+    labels = resolution_labels or {}
+
+    row: List[InlineKeyboardButton] = []
+    for height in available_heights:
+        raw_label = labels.get(height, f"{height}p")
+        if raw_label in ("2160p", "4K") or height == 2160:
+            label = "4K"
+        elif raw_label in ("1440p", "2K") or height == 1440:
+            label = "2K"
+        else:
+            label = raw_label
+        btn = InlineKeyboardButton(
+            text=f"🎬 {label}",
+            callback_data=f"adv_q:{source_id}:{height}",
+        )
+        row.append(btn)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([
+        InlineKeyboardButton(text="🔙 Back to Options", callback_data=f"adv_menu:{source_id}"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 

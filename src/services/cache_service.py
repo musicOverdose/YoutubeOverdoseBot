@@ -21,18 +21,28 @@ class CacheService:
         codec: Optional[str] = None,
         height: Optional[int] = None,
         subtitle_lang: Optional[str] = None,
+        clip_start: Optional[int] = None,
+        clip_end: Optional[int] = None,
+        is_muted: bool = False,
     ) -> str:
         """
         Generates deterministic, unique cache keys:
-        - Video: {source_id}:{codec}:{height}p
-        - MP3: {source_id}:MP3
+        - Video: {source_id}:{codec}:{height}p (with optional :clip_{start}_{end} and :muted)
+        - MP3: {source_id}:MP3 (with optional :clip_{start}_{end})
         - English Subtitle: {source_id}:SUBTITLE:EN
         - Persian Subtitle: {source_id}:SUBTITLE:EN_TO_FA
         """
         if operation == OperationType.VIDEO.value or operation == "VIDEO":
-            raw_key = f"{source_id}:{codec.upper()}:{height}p"
+            codec_str = codec.upper() if codec else "ANY"
+            raw_key = f"{source_id}:{codec_str}:{height}p"
+            if clip_start is not None and clip_end is not None:
+                raw_key += f":clip_{clip_start}_{clip_end}"
+            if is_muted:
+                raw_key += ":muted"
         elif operation == OperationType.AUDIO.value or operation == "AUDIO":
             raw_key = f"{source_id}:MP3"
+            if clip_start is not None and clip_end is not None:
+                raw_key += f":clip_{clip_start}_{clip_end}"
         elif operation == OperationType.SUBTITLE.value or operation == "SUBTITLE":
             if subtitle_lang and subtitle_lang.upper() == "FA":
                 raw_key = f"{source_id}:SUBTITLE:EN_TO_FA"
@@ -40,6 +50,10 @@ class CacheService:
                 raw_key = f"{source_id}:SUBTITLE:EN"
         else:
             raw_key = f"{source_id}:{operation}:{codec}:{height}"
+            if clip_start is not None and clip_end is not None:
+                raw_key += f":clip_{clip_start}_{clip_end}"
+            if is_muted:
+                raw_key += ":muted"
 
         # Hash internally for fixed-length deterministic key
         hashed = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()

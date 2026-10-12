@@ -1,20 +1,114 @@
 import html
+import json
 import os
 import uuid
+from typing import Optional
 from aiogram import Bot, Router
-from aiogram.types import CallbackQuery, FSInputFile, LinkPreviewOptions
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, FSInputFile, LinkPreviewOptions, Message
+from src.bot.handlers.audio_handler import enqueue_audio_job
 from src.bot.handlers.codec_handler import enqueue_video_job, safe_callback_answer
-from src.bot.keyboards import build_must_join_keyboard, build_quality_keyboard
+from src.bot.keyboards import (
+    build_advanced_options_keyboard,
+    build_advanced_quality_keyboard,
+    build_must_join_keyboard,
+    build_quality_keyboard,
+)
 from src.core.config import settings
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 from src.services.must_join_service import MustJoinService
 from src.services.setting_service import SettingService
 from src.services.thumbnail_service import ThumbnailService
 from src.services.ytdlp_service import YtDlpService, get_canonical_url
+from src.utils.timestamp_parser import format_timestamp, parse_timestamp_range
 
 logger = setup_logger("quality_handler")
 quality_router = Router()
+
+
+class AdvancedClipStates(StatesGroup):
+    waiting_for_timestamp = State()
+
+
+ADV_STATE_TTL = 1800
+
+
+async def get_adv_options(user_id: int, chat_id: int, source_id: str) -> dict:
+    r = get_redis_client()
+    key = f"advanced_options:{user_id}:{chat_id}:{source_id}"
+    data = await r.get(key)
+    if data:
+        try:
+            return json.loads(data if isinstance(data, str) else data.decode("utf-8"))
+        except Exception:
+            pass
+    return {
+        "clip_start": None,
+        "clip_end": None,
+        "is_muted": False,
+        "mode": "video",
+    }
+
+
+async def set_adv_options(user_id: int, chat_id: int, source_id: str, data: dict) -> None:
+    r = get_redis_client()
+    key = f"advanced_options:{user_id}:{chat_id}:{source_id}"
+    await r.set(key, json.dumps(data), ex=ADV_STATE_TTL)
+
+
+async def clear_adv_options(user_id: int, chat_id: int, source_id: str) -> None:
+    r = get_redis_client()
+    key = f"advanced_options:{user_id}:{chat_id}:{source_id}"
+    await r.delete(key)
+
+
+def render_advanced_options_card(
+    title: str,
+    duration: int,
+    clip_start: Optional[int],
+    clip_end: Optional[int],
+    is_muted: bool,
+    mode: str,
+) -> str:
+    total_dur_str = format_timestamp(duration) if duration else "00:00"
+    if clip_start is not None and clip_end is not None:
+        clip_len = max(0, clip_end - clip_start)
+        clip_range_str = f"{format_timestamp(clip_start)} ➔ {format_timestamp(clip_end)} (Length: {format_timestamp(clip_len)})"
+    else:
+        clip_range_str = f"00:00 ➔ {total_dur_str} (Full Video)"
+
+    if mode == "mp3":
+        audio_str = "N/A (MP3 Audio Mode)"
+        mode_str = "💿 MP3"
+    else:
+        audio_str = "🔇 Muted (Sound OFF)" if is_muted else "🔊 Normal (Sound ON)"
+        mode_str = "🎬 Video"
+
+    clean_title = html.escape(title[:60])
+    return (
+        f"🎛 <b>Advanced Download Options</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🎬 <b>{clean_title}</b> ({total_dur_str})\n\n"
+        f"⏱ <b>Clip Range:</b>  {clip_range_str}\n"
+        f"🔊 <b>Audio:</b>       {audio_str}\n"
+        f"📦 <b>Format:</b>      {mode_str}\n\n"
+        f"Adjust options below, then select quality to download:\n"
+        f"━━━━━━━━━━━━━━━━━━━"
+    )
+
+
+async def safe_edit_menu(message, text: str, reply_markup=None) -> None:
+    try:
+        if message.caption is not None:
+            await message.edit_caption(caption=text, reply_markup=reply_markup)
+        else:
+            await message.edit_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        logger.debug("Failed editing menu message: %s", e)
+
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("q:"))
@@ -282,4 +376,461 @@ async def on_show_description(callback: CallbackQuery, bot: Bot):
                 text=f"<blockquote expandable>{chunk}</blockquote>",
                 link_preview_options=no_preview,
             )
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_menu:"))
+async def on_advanced_menu(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+        duration = int(info.get("duration") or 0)
+    except Exception as e:
+        logger.warning("Could not extract metadata for adv_menu: %s", e)
+        title = "YouTube Video"
+        duration = 0
+
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    card_text = render_advanced_options_card(
+        title=title,
+        duration=duration,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=adv_opts.get("is_muted", False),
+        mode=adv_opts.get("mode", "video"),
+    )
+    kb = build_advanced_options_keyboard(
+        source_id=source_id,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=adv_opts.get("is_muted", False),
+        mode=adv_opts.get("mode", "video"),
+    )
+    await safe_edit_menu(callback.message, card_text, reply_markup=kb)
+    await safe_callback_answer(callback)
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_mute:"))
+async def on_toggle_mute(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    if adv_opts.get("mode") == "mp3":
+        await safe_callback_answer(callback, "Mute is not applicable in MP3 mode.", show_alert=True)
+        return
+
+    new_mute = not adv_opts.get("is_muted", False)
+    adv_opts["is_muted"] = new_mute
+    await set_adv_options(user_id, chat_id, source_id, adv_opts)
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+        duration = int(info.get("duration") or 0)
+    except Exception:
+        title = "YouTube Video"
+        duration = 0
+
+    card_text = render_advanced_options_card(
+        title=title,
+        duration=duration,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=new_mute,
+        mode=adv_opts.get("mode", "video"),
+    )
+    kb = build_advanced_options_keyboard(
+        source_id=source_id,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=new_mute,
+        mode=adv_opts.get("mode", "video"),
+    )
+    await safe_edit_menu(callback.message, card_text, reply_markup=kb)
+    await safe_callback_answer(callback, "Mute: ON (Sound OFF)" if new_mute else "Mute: OFF (Sound ON)")
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_mode:"))
+async def on_toggle_mode(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    current_mode = adv_opts.get("mode", "video")
+    new_mode = "mp3" if current_mode == "video" else "video"
+    adv_opts["mode"] = new_mode
+    await set_adv_options(user_id, chat_id, source_id, adv_opts)
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+        duration = int(info.get("duration") or 0)
+    except Exception:
+        title = "YouTube Video"
+        duration = 0
+
+    card_text = render_advanced_options_card(
+        title=title,
+        duration=duration,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=adv_opts.get("is_muted", False),
+        mode=new_mode,
+    )
+    kb = build_advanced_options_keyboard(
+        source_id=source_id,
+        clip_start=adv_opts.get("clip_start"),
+        clip_end=adv_opts.get("clip_end"),
+        is_muted=adv_opts.get("is_muted", False),
+        mode=new_mode,
+    )
+    await safe_edit_menu(callback.message, card_text, reply_markup=kb)
+    await safe_callback_answer(callback, f"Mode: {'💿 MP3 Audio' if new_mode == 'mp3' else '🎬 Video'}")
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_undo:"))
+async def on_reset_options(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    adv_opts = {
+        "clip_start": None,
+        "clip_end": None,
+        "is_muted": False,
+        "mode": "video",
+    }
+    await set_adv_options(user_id, chat_id, source_id, adv_opts)
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+        duration = int(info.get("duration") or 0)
+    except Exception:
+        title = "YouTube Video"
+        duration = 0
+
+    card_text = render_advanced_options_card(
+        title=title,
+        duration=duration,
+        clip_start=None,
+        clip_end=None,
+        is_muted=False,
+        mode="video",
+    )
+    kb = build_advanced_options_keyboard(
+        source_id=source_id,
+        clip_start=None,
+        clip_end=None,
+        is_muted=False,
+        mode="video",
+    )
+    await safe_edit_menu(callback.message, card_text, reply_markup=kb)
+    await safe_callback_answer(callback, "Options reset to default.")
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_time:"))
+async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        duration = int(info.get("duration") or 0)
+    except Exception:
+        duration = 0
+
+    prompt_msg = await callback.message.answer(
+        "⏱ <b>Enter Timestamp Range</b>\n\n"
+        "Send the start and end timestamp for your clip (maximum 20 minutes):\n\n"
+        "<b>Examples:</b>\n"
+        "• <code>1:23 - 3:30</code>\n"
+        "• <code>01:23 03:30</code>\n"
+        "• <code>45s - 2m</code>\n"
+        "• <code>75 - 210</code>\n\n"
+        "<i>Send /cancel to discard.</i>"
+    )
+
+    await state.set_state(AdvancedClipStates.waiting_for_timestamp)
+    await state.update_data(
+        source_id=source_id,
+        chat_id=chat_id,
+        menu_message_id=callback.message.message_id,
+        duration=duration,
+        prompt_msg_id=prompt_msg.message_id,
+    )
+    await safe_callback_answer(callback)
+
+
+@quality_router.message(AdvancedClipStates.waiting_for_timestamp)
+async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMContext):
+    data = await state.get_data()
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    prompt_msg_id = data.get("prompt_msg_id")
+    source_id = data.get("source_id")
+    menu_message_id = data.get("menu_message_id")
+    duration = data.get("duration", 0)
+
+    # Cancel check
+    if message.text and message.text.strip().lower() in ("/cancel", "cancel"):
+        if prompt_msg_id:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=prompt_msg_id)
+            except Exception:
+                pass
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await state.clear()
+        return
+
+    ok, start_sec, end_sec, err = parse_timestamp_range(message.text or "", source_duration=duration)
+
+    # Auto-cleanup: delete prompt and user reply
+    if prompt_msg_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=prompt_msg_id)
+        except Exception:
+            pass
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if not ok:
+        err_prompt = await message.answer(
+            f"❌ <b>Invalid timestamp:</b> {err}\n\n"
+            "Please try again (e.g. <code>1:23 - 3:30</code>) or send /cancel:"
+        )
+        await state.update_data(prompt_msg_id=err_prompt.message_id)
+        return
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    adv_opts["clip_start"] = start_sec
+    adv_opts["clip_end"] = end_sec
+    await set_adv_options(user_id, chat_id, source_id, adv_opts)
+    await state.clear()
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+    except Exception:
+        title = "YouTube Video"
+
+    card_text = render_advanced_options_card(
+        title=title,
+        duration=duration,
+        clip_start=start_sec,
+        clip_end=end_sec,
+        is_muted=adv_opts.get("is_muted", False),
+        mode=adv_opts.get("mode", "video"),
+    )
+    kb = build_advanced_options_keyboard(
+        source_id=source_id,
+        clip_start=start_sec,
+        clip_end=end_sec,
+        is_muted=adv_opts.get("is_muted", False),
+        mode=adv_opts.get("mode", "video"),
+    )
+    try:
+        await bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=menu_message_id,
+            caption=card_text,
+            reply_markup=kb,
+        )
+    except Exception:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=menu_message_id,
+                text=card_text,
+                reply_markup=kb,
+            )
+        except Exception as e:
+            logger.warning("Could not edit menu message with new timestamp range: %s", e)
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_finish:"))
+async def on_advanced_finish(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    clip_start = adv_opts.get("clip_start")
+    clip_end = adv_opts.get("clip_end")
+
+    if adv_opts.get("mode") == "mp3":
+        await clear_adv_options(user_id, chat_id, source_id)
+        await enqueue_audio_job(
+            bot=bot,
+            callback=callback,
+            source_id=source_id,
+            clip_start=clip_start,
+            clip_end=clip_end,
+        )
+        return
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+    except Exception as e:
+        logger.error("Error fetching metadata in adv_finish: %s", e)
+        info = None
+
+    max_height = getattr(settings, "DEFAULT_MAX_HEIGHT", 2160)
+    try:
+        app_settings = await SettingService.get_application_settings()
+        max_height = app_settings.get("default_max_height") or max_height
+    except Exception:
+        pass
+
+    available_heights = YtDlpService.get_available_resolutions(info, max_height=max_height)
+    resolution_labels = YtDlpService.get_resolution_labels(info)
+    kb = build_advanced_quality_keyboard(
+        source_id=source_id,
+        available_heights=available_heights,
+        resolution_labels=resolution_labels,
+    )
+
+    if clip_start is not None and clip_end is not None:
+        range_str = f"{format_timestamp(clip_start)} ➔ {format_timestamp(clip_end)}"
+    else:
+        range_str = "Full Video"
+    sound_str = "🔇 Muted" if adv_opts.get("is_muted") else "🔊 Sound ON"
+
+    text = (
+        f"🎬 <b>Select Video Quality</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ <b>Range:</b>  {range_str}\n"
+        f"🔊 <b>Audio:</b>  {sound_str}\n\n"
+        f"Choose your preferred resolution:"
+    )
+    await safe_edit_menu(callback.message, text, reply_markup=kb)
+    await safe_callback_answer(callback)
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_q:"))
+async def on_advanced_quality_selected(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await safe_callback_answer(callback, "Invalid request.", show_alert=True)
+        return
+
+    _, source_id, height_str = parts
+    try:
+        height = int(height_str)
+    except ValueError:
+        await safe_callback_answer(callback, "Invalid resolution.", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url)
+        codec = YtDlpService.auto_select_codec(info, height)
+    except Exception as e:
+        logger.error(f"Error inspecting metadata for {source_id} at {height}p: {e}")
+        codec = "H264"
+        info = None
+
+    adv_opts = await get_adv_options(user_id, chat_id, source_id)
+    clip_start = adv_opts.get("clip_start")
+    clip_end = adv_opts.get("clip_end")
+    is_muted = adv_opts.get("is_muted", False)
+
+    await clear_adv_options(user_id, chat_id, source_id)
+
+    await enqueue_video_job(
+        bot=bot,
+        callback=callback,
+        source_id=source_id,
+        height=height,
+        codec=codec,
+        info=info,
+        clip_start=clip_start,
+        clip_end=clip_end,
+        is_muted=is_muted,
+    )
+
+
+@quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_back:"))
+async def on_advanced_back_to_menu(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    source_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
+            return
+
+    canonical_url = get_canonical_url(source_id)
+    try:
+        info = await YtDlpService.extract_metadata(canonical_url, use_cache=True)
+        title = info.get("title", "YouTube Video")
+        max_height = getattr(settings, "DEFAULT_MAX_HEIGHT", 2160)
+        try:
+            app_settings = await SettingService.get_application_settings()
+            max_height = app_settings.get("default_max_height") or max_height
+        except Exception:
+            pass
+        available_heights = YtDlpService.get_available_resolutions(info, max_height=max_height)
+        resolution_labels = YtDlpService.get_resolution_labels(info)
+        kb = build_quality_keyboard(source_id, available_heights, resolution_labels=resolution_labels)
+
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=f"<b>{title}</b>", reply_markup=kb)
+        else:
+            await callback.message.edit_text(text=f"🎬 <b>{title}</b>", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Error restoring main quality menu: %s", e)
+        await safe_callback_answer(callback, "Could not refresh quality options.", show_alert=True)
+        return
+
+    await safe_callback_answer(callback)
+
 

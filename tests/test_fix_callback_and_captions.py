@@ -57,17 +57,17 @@ def test_caption_formatting_2k_and_4k():
     assert format_video_caption_resolution("720p", 720) == "720p"
 
     # 1440p -> 2K
-    assert format_video_caption_resolution("1440p", 1440) == "1440p - 2K"
-    assert format_video_caption_resolution(None, 1440) == "1440p - 2K"
+    assert format_video_caption_resolution("1440p", 1440) == "2K"
+    assert format_video_caption_resolution(None, 1440) == "2K"
 
     # 2160p -> 4K
-    assert format_video_caption_resolution("2160p", 2160) == "2160p - 4K"
-    assert format_video_caption_resolution(None, 2160) == "2160p - 4K"
+    assert format_video_caption_resolution("2160p", 2160) == "4K"
+    assert format_video_caption_resolution(None, 2160) == "4K"
 
     # Vertical resolutions
-    assert format_video_caption_resolution("1440p (Vertical)", 1440) == "1440p (Vertical) - 2K"
-    assert format_video_caption_resolution("2160p (Vertical)", 2160) == "2160p (Vertical) - 4K"
+    assert format_video_caption_resolution("1440p (Vertical)", 1440) == "2K (Vertical)"
+    assert format_video_caption_resolution("2160p (Vertical)", 2160) == "4K (Vertical)"
 
     # Does not duplicate if already present
-    assert format_video_caption_resolution("1440p - 2K", 1440) == "1440p - 2K"
-    assert format_video_caption_resolution("2160p - 4K", 2160) == "2160p - 4K"
+    assert format_video_caption_resolution("2K", 1440) == "2K"
+    assert format_video_caption_resolution("4K", 2160) == "4K"

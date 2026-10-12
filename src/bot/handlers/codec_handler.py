@@ -17,6 +17,7 @@ from src.services.must_join_service import MustJoinService
 from src.services.queue_service import QueueService
 from src.services.setting_service import SettingService
 from src.services.ytdlp_service import YtDlpService, get_canonical_url
+from src.utils.timestamp_parser import format_timestamp
 
 logger = setup_logger("codec_handler")
 codec_router = Router()
@@ -75,6 +76,9 @@ async def enqueue_video_job(
     height: int,
     codec: str,
     info: Optional[dict] = None,
+    clip_start: Optional[int] = None,
+    clip_end: Optional[int] = None,
+    is_muted: bool = False,
 ) -> None:
     """
     Core video queuing pipeline:
@@ -134,8 +138,9 @@ async def enqueue_video_job(
             res_display = f"{height}p"
 
         # 3. PRE-DOWNLOAD FINAL FILE SIZE CHECK
+        clip_duration = (clip_end - clip_start) if (clip_start is not None and clip_end is not None) else None
         expected_bytes, size_source, size_details = YtDlpService.calculate_expected_video_size(
-            info, height, codec
+            info, height, codec, clip_duration=clip_duration, is_muted=is_muted
         )
         api_mode = await SettingService.get_active_api_mode(session)
         limit_mb = SettingService.get_max_video_file_size_mb(api_mode)
@@ -203,6 +208,9 @@ async def enqueue_video_job(
             operation=OperationType.VIDEO.value,
             codec=codec,
             height=height,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            is_muted=is_muted,
         )
 
         cached_entry = await CacheService.get_cached_entry(session, cache_key)
@@ -218,7 +226,7 @@ async def enqueue_video_job(
                         await menu_msg.delete()
                     except Exception as del_err:
                         logger.debug("Could not delete menu message on cache delivery: %s", del_err)
-                await safe_callback_answer(callback, "Delivered from cache! 🚀")
+                    await safe_callback_answer(callback, "Delivered from cache! 🚀")
                 return
             else:
                 logger.warning(f"Cache delivery failed: {err}. Falling through to download.")
@@ -246,6 +254,13 @@ async def enqueue_video_job(
         res = await session.execute(stmt)
         existing_job = res.scalars().first()
 
+        clip_tag = ""
+        if clip_start is not None and clip_end is not None:
+            mute_prefix = "Muted " if is_muted else ""
+            clip_tag = f"\n⏱ <b>{mute_prefix}Clip:</b> {format_timestamp(clip_start)} — {format_timestamp(clip_end)}"
+        elif is_muted:
+            clip_tag = "\n🔇 <b>Muted Video</b>"
+
         if existing_job:
             # Coalesce: Attach this user request to existing job
             req = JobRequest(
@@ -272,7 +287,7 @@ async def enqueue_video_job(
 
             status_msg = await callback.message.answer(
                 f"⏳ <b>Attached to existing job</b>\n"
-                f"🎬 <b>{res_display}</b>\n"
+                f"🎬 <b>{res_display}</b>{clip_tag}\n"
                 f"{size_line}\n"
                 f"Position: {pos_str}\n"
                 f"Active jobs: {active_count} / {limit}",
@@ -302,6 +317,9 @@ async def enqueue_video_job(
             target_height=height,
             status=JobStatus.QUEUED.value,
             cache_key=cache_key,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            is_muted=is_muted,
         )
         session.add(new_job)
 
@@ -329,7 +347,7 @@ async def enqueue_video_job(
 
         status_msg = await callback.message.answer(
             f"⏳ <b>Added to queue</b>\n"
-            f"🎬 <b>{res_display}</b>\n"
+            f"🎬 <b>{res_display}</b>{clip_tag}\n"
             f"{size_line}\n"
             f"Position: #{position}\n"
             f"Active: {active_count} / {limit}",

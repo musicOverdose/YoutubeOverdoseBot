@@ -34,6 +34,7 @@ from src.services.setting_service import SettingService
 from src.services.system_service import SystemService
 from src.services.thumbnail_service import ThumbnailService
 from src.services.ytdlp_service import YtDlpService, YouTubeSubtitleRateLimitError
+from src.utils.timestamp_parser import format_clip_filename_tag, format_timestamp
 from src.worker.notifier import StatusNotifier
 from src.worker.telegram_factory import TelegramClientFactory
 
@@ -43,24 +44,16 @@ logger = setup_logger("worker_processor")
 def format_video_caption_resolution(resolution: Optional[str], height: Optional[int] = None) -> str:
     """
     Formats the resolution text for video message captions on Telegram.
-    For 1440p and 2160p, explicitly appends '2K' and '4K' (e.g. '1440p - 2K', '2160p - 4K').
+    Simplifies 2160p -> 4K, 1440p -> 2K, and preserves other resolutions (1080p, 720p, etc.).
     """
     res = (resolution or "").strip()
-    is_4k = (height == 2160) or ("2160" in res)
-    is_2k = (height == 1440) or ("1440" in res)
+    is_4k = (height == 2160) or ("2160" in res) or (res.upper() == "4K")
+    is_2k = (height == 1440) or ("1440" in res) or (res.upper() == "2K")
 
     if is_4k:
-        if "4k" not in res.lower():
-            if res:
-                return f"{res} - 4K"
-            return "2160p - 4K"
-        return res
+        return "4K (Vertical)" if "vertical" in res.lower() else "4K"
     if is_2k:
-        if "2k" not in res.lower():
-            if res:
-                return f"{res} - 2K"
-            return "1440p - 2K"
-        return res
+        return "2K (Vertical)" if "vertical" in res.lower() else "2K"
     return res or (f"{height}p" if height else "")
 
 
@@ -294,9 +287,13 @@ class JobProcessor:
                     target_codec = job.output_codec or "H264"
 
                     # 1. WORKER-SIDE SECONDARY SIZE & ROUTE SAFETY CHECK (Requirement 5, 6, 15)
+                    clip_duration = (job.clip_end - job.clip_start) if (job.clip_start is not None and job.clip_end is not None) else None
+                    is_muted = bool(job.is_muted)
+                    is_clip = (job.clip_start is not None and job.clip_end is not None)
+
                     info = await YtDlpService.extract_metadata(job.canonical_url)
                     expected_bytes, size_source, size_details = YtDlpService.calculate_expected_video_size(
-                        info, target_height, target_codec
+                        info, target_height, target_codec, clip_duration=clip_duration, is_muted=is_muted
                     )
                     limit_mb = SettingService.get_max_video_file_size_mb(api_mode)
                     limit_bytes = limit_mb * 1024 * 1024
@@ -362,22 +359,34 @@ class JobProcessor:
 
                     job.status = JobStatus.DOWNLOADING.value
                     await session.commit()
-                    await notifier.update("⬇️", "Downloading video", f"Resolution: {job.resolution} ({target_codec})", force=True)
+                    clip_status = ""
+                    if is_clip:
+                        clip_status = f" • Clip ({format_timestamp(job.clip_start)} - {format_timestamp(job.clip_end)})"
+                    if is_muted:
+                        clip_status += " • Muted"
+                    await notifier.update("⬇️", "Downloading video", f"Resolution: {job.resolution} ({target_codec}){clip_status}", force=True)
 
                     logger.info(
-                        "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for job %s (resolution=%dp, codec=%s)",
+                        "OPERATION: DOWNLOAD + REMUX (ZERO VIDEO RE-ENCODE) for job %s (resolution=%dp, codec=%s, is_clip=%s, is_muted=%s)",
                         job_id,
                         target_height,
                         target_codec,
+                        is_clip,
+                        is_muted,
                     )
 
                     download_template = os.path.join(job_dir, "input.%(ext)s")
+                    ydl_format = YtDlpService.build_video_format_spec(target_height, target_codec, is_muted=is_muted)
                     ydl_opts = YtDlpService.get_base_opts()
                     ydl_opts.update({
                         "outtmpl": download_template,
-                        "format": YtDlpService.build_video_format_spec(target_height, target_codec),
+                        "format": ydl_format,
                         "writethumbnail": True,
                     })
+                    if is_clip:
+                        ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(
+                            None, [(job.clip_start, job.clip_end)]
+                        )
 
                     loop = asyncio.get_running_loop()
 
@@ -476,9 +485,13 @@ class JobProcessor:
                         except Exception as fe:
                             logger.debug("Could not convert found_thumb_file to cover: %s", fe)
 
-                    # Check resolution fidelity of downloaded cover vs native video
+                    # Hybrid Thumbnail Selection:
+                    # If this is a cut clip, extract a representative frame directly from the cut video stream
+                    # Otherwise, check resolution fidelity of downloaded cover vs native video
                     use_frame_extraction = False
-                    if early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
+                    if is_clip:
+                        use_frame_extraction = True
+                    elif early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
                         # Video is HD (>= 720p). If cover art is low-res (e.g. YouTube auto-generated 480p pillarbox),
                         # extract crystal-clear native frame directly from the HD video stream!
                         if cover_downloaded and os.path.exists(raw_cover_path):
@@ -509,7 +522,7 @@ class JobProcessor:
                             if frame_ok and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                                 cover_downloaded = True
                         except Exception as frame_err:
-                            logger.warning("Native frame extraction error: %s", frame_err)
+                            logger.warning("Frame extraction error: %s", frame_err)
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
@@ -522,7 +535,8 @@ class JobProcessor:
                         target_codec=target_codec,
                         target_height=target_height,
                         cover_image_path=raw_cover_path if cover_downloaded else None,
-                        prepend_thumbnail=True,
+                        prepend_thumbnail=False if is_clip else True,
+                        is_muted=is_muted,
                     )
                     if not process_ok or not os.path.exists(output_file):
                         raise RuntimeError("FFmpeg processing failed")
@@ -586,7 +600,27 @@ class JobProcessor:
                     await notifier.update("📤", "Uploading...", "Sending video to Telegram...", force=True)
 
                     disp_res = format_video_caption_resolution(job.resolution, target_height)
-                    caption_text = f"🎬 <b>{job.title}</b>\n({disp_res})" if disp_res else f"🎬 <b>{job.title}</b>"
+                    tag_parts = [disp_res] if disp_res else []
+                    if is_clip:
+                        tag_parts.append(f"{format_timestamp(job.clip_start)} ➔ {format_timestamp(job.clip_end)}")
+                    if is_muted:
+                        tag_parts.append("Muted")
+                    meta_str = " • ".join(tag_parts)
+                    caption_text = f"🎬 <b>{job.title}</b>\n({meta_str})" if meta_str else f"🎬 <b>{job.title}</b>"
+
+                    # Custom filename for video
+                    clean_title = "".join(c for c in job.title if c.isalnum() or c in (" ", "_", "-")).strip() or "video"
+                    short_title = clean_title[:45].strip()
+                    fn_parts = []
+                    if disp_res:
+                        fn_parts.append(disp_res)
+                    if is_clip:
+                        fn_parts.append(f"clip_{format_clip_filename_tag(job.clip_start)}-{format_clip_filename_tag(job.clip_end)}")
+                    if is_muted:
+                        fn_parts.append("muted")
+                    fn_tag = f"_[{'_'.join(fn_parts)}]" if fn_parts else ""
+                    custom_video_filename = f"{short_title}{fn_tag}.mp4"
+
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
                         api_mode=api_mode,
@@ -595,6 +629,7 @@ class JobProcessor:
                         operation=job.operation,
                         job_id=job_id,
                         job_title=job.title,
+                        custom_filename=custom_video_filename,
                         caption=caption_text,
                         extra_kwargs=extra_kwargs,
                     )
@@ -617,9 +652,13 @@ class JobProcessor:
                 # PIPELINE: AUDIO (MP3) PROCESSING
                 # ==========================================
                 elif job.operation == OperationType.AUDIO.value or job.operation == "AUDIO":
+                    is_audio_clip = (job.clip_start is not None and job.clip_end is not None)
                     job.status = JobStatus.DOWNLOADING.value
                     await session.commit()
-                    await notifier.update("⬇️", "Downloading", "Fetching high quality audio...", force=True)
+                    audio_info = ""
+                    if is_audio_clip:
+                        audio_info = f" • Clip ({format_timestamp(job.clip_start)} - {format_timestamp(job.clip_end)})"
+                    await notifier.update("⬇️", "Downloading", f"Fetching high quality audio...{audio_info}", force=True)
 
                     # Extract video metadata to get rich audio tags (artist, title, upload_date, etc.)
                     meta_info = {}
@@ -633,6 +672,11 @@ class JobProcessor:
                     )
                     safe_audio_filename = FFmpegService.generate_safe_audio_filename(artist=audio_artist, title=audio_title)
 
+                    if is_audio_clip:
+                        audio_duration = max(1, int(job.clip_end - job.clip_start))
+                        base_fn, ext_fn = os.path.splitext(safe_audio_filename)
+                        safe_audio_filename = f"{base_fn}_[clip_{format_clip_filename_tag(job.clip_start)}-{format_clip_filename_tag(job.clip_end)}]{ext_fn}"
+
                     audio_template = os.path.join(job_dir, "audio.%(ext)s")
                     ydl_opts = YtDlpService.get_base_opts()
                     ydl_opts.update({
@@ -640,6 +684,10 @@ class JobProcessor:
                         "format": "bestaudio/best",
                         "writethumbnail": True,
                     })
+                    if is_audio_clip:
+                        ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(
+                            None, [(job.clip_start, job.clip_end)]
+                        )
 
                     loop = asyncio.get_running_loop()
 
@@ -718,6 +766,10 @@ class JobProcessor:
 
                     tg_thumbnail = FSInputFile(cover_jpg_path) if os.path.exists(cover_jpg_path) else None
 
+                    audio_caption = None
+                    if is_audio_clip:
+                        audio_caption = f"🎵 <b>{audio_title}</b>\n(Clip • {format_timestamp(job.clip_start)} ➔ {format_timestamp(job.clip_end)})"
+
                     uploaded_msg_id, file_size = await self._send_media_to_cache(
                         bot=bot,
                         api_mode=api_mode,
@@ -727,6 +779,7 @@ class JobProcessor:
                         job_id=job_id,
                         job_title=audio_title,
                         custom_filename=safe_audio_filename,
+                        caption=audio_caption,
                         performer=audio_artist,
                         duration=audio_duration,
                         thumbnail=tg_thumbnail,

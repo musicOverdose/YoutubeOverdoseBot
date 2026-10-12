@@ -330,6 +330,7 @@ class FFmpegService:
         cancellation_event: Optional[asyncio.Event] = None,
         cover_image_path: Optional[str] = None,
         prepend_thumbnail: bool = True,
+        is_muted: bool = False,
     ) -> bool:
         """
         Remuxes video to exact output format (MP4 with target_codec + AAC).
@@ -387,7 +388,7 @@ class FFmpegService:
             cmd = ["ffmpeg", "-y", "-i", input_path]
             cmd.extend(["-c:v", "copy"])
 
-            if has_audio:
+            if has_audio and not is_muted:
                 if can_copy_a:
                     logger.info("Stream-copying audio for %s (already AAC)", input_path)
                     cmd.extend(["-c:a", "copy"])

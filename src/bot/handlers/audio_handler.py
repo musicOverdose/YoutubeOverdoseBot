@@ -16,20 +16,36 @@ from src.services.must_join_service import MustJoinService
 from src.services.queue_service import QueueService
 from src.services.ytdlp_service import YtDlpService, get_canonical_url
 
+from typing import Optional
+from src.utils.timestamp_parser import format_timestamp
+
 logger = setup_logger("audio_handler")
 audio_router = Router()
 
 
 @audio_router.callback_query(lambda c: c.data and c.data.startswith("aud:"))
 async def on_audio_selected(callback: CallbackQuery, bot: Bot):
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
     parts = callback.data.split(":")
     if len(parts) != 3:
         await safe_callback_answer(callback, "Invalid parameters.", show_alert=True)
         return
 
     _, source_id, format_type = parts
+    await enqueue_audio_job(bot=bot, callback=callback, source_id=source_id)
+
+
+async def enqueue_audio_job(
+    bot: Bot,
+    callback: CallbackQuery,
+    source_id: str,
+    clip_start: Optional[int] = None,
+    clip_end: Optional[int] = None,
+) -> None:
+    """
+    Enqueues or instantly delivers an MP3 audio job (or audio clip).
+    """
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
     canonical_url = get_canonical_url(source_id)
 
     menu_msg = callback.message
@@ -51,6 +67,8 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
             source_id=source_id,
             operation=OperationType.AUDIO.value,
             codec="MP3",
+            clip_start=clip_start,
+            clip_end=clip_end,
         )
 
         cached_entry = await CacheService.get_cached_entry(session, cache_key)
@@ -96,6 +114,10 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
         res = await session.execute(stmt)
         existing_job = res.scalars().first()
 
+        clip_tag = ""
+        if clip_start is not None and clip_end is not None:
+            clip_tag = f"\n⏱ <b>Clip:</b> {format_timestamp(clip_start)} — {format_timestamp(clip_end)}"
+
         if existing_job:
             req = JobRequest(
                 job_id=existing_job.id,
@@ -121,7 +143,7 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
 
             status_msg = await callback.message.answer(
                 f"⏳ <b>Attached to existing job</b>\n"
-                f"💿 <b>MP3 Audio</b>\n"
+                f"💿 <b>MP3 Audio</b>{clip_tag}\n"
                 f"Position: {pos_str}\n"
                 f"Active jobs: {active_count} / {limit}",
                 reply_markup=build_queue_status_keyboard(existing_job.id),
@@ -150,6 +172,9 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
             target_height=None,
             status=JobStatus.QUEUED.value,
             cache_key=cache_key,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            is_muted=False,
         )
         session.add(new_job)
 
@@ -177,7 +202,7 @@ async def on_audio_selected(callback: CallbackQuery, bot: Bot):
 
         status_msg = await callback.message.answer(
             f"⏳ <b>Added to queue</b>\n"
-            f"💿 <b>MP3 Audio</b>\n"
+            f"💿 <b>MP3 Audio</b>{clip_tag}\n"
             f"Position: #{position}\n"
             f"Active: {active_count} / {limit}",
             reply_markup=build_queue_status_keyboard(job_id),
