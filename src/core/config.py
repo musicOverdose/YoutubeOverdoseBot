@@ -54,6 +54,7 @@ class Settings(BaseSettings):
 
     # Duration Controls
     MAX_VIDEO_DURATION_SECONDS: int = Field(default=7200)
+    MAX_CLIP_DURATION_SECONDS: int = Field(default=900, description="Maximum allowed clip trimming duration in seconds (default 900 = 15m)")
     ALLOW_UNKNOWN_DURATION: bool = Field(default=False)
     CACHE_HIT_BYPASSES_DURATION_LIMIT: bool = Field(default=True)
     DEFAULT_MAX_HEIGHT: int = Field(default=1080)

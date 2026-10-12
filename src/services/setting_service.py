@@ -54,6 +54,7 @@ SETTING_UNSUPPORTED_LINK_MSG = "unsupported_link_message"
 SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL = "max_video_file_size_mb_local"
 SETTING_MAX_VIDEO_FILE_SIZE_MB_CLOUD = "max_video_file_size_mb_cloud"
 SETTING_MAX_VIDEO_DURATION_SECONDS = "max_video_duration_seconds"
+SETTING_MAX_CLIP_DURATION_SECONDS = "max_clip_duration_seconds"
 SETTING_ALLOW_UNKNOWN_DURATION = "allow_unknown_duration"
 SETTING_CACHE_HIT_BYPASSES_DURATION_LIMIT = "cache_hit_bypasses_duration_limit"
 SETTING_MAX_CONCURRENT_PER_USER = "max_concurrent_per_user"
@@ -89,6 +90,7 @@ APP_SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
     SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL: {"attr": "MAX_VIDEO_FILE_SIZE_MB_LOCAL", "type": int, "encrypted": False, "desc": "Max video file size (MB) for Local Bot API"},
     SETTING_MAX_VIDEO_FILE_SIZE_MB_CLOUD: {"attr": "MAX_VIDEO_FILE_SIZE_MB_CLOUD", "type": int, "encrypted": False, "desc": "Max video file size (MB) for Cloud Bot API"},
     SETTING_MAX_VIDEO_DURATION_SECONDS: {"attr": "MAX_VIDEO_DURATION_SECONDS", "type": int, "encrypted": False, "desc": "Max video duration in seconds"},
+    SETTING_MAX_CLIP_DURATION_SECONDS: {"attr": "MAX_CLIP_DURATION_SECONDS", "type": int, "encrypted": False, "desc": "Max clip trimming duration in seconds"},
     SETTING_ALLOW_UNKNOWN_DURATION: {"attr": "ALLOW_UNKNOWN_DURATION", "type": bool, "encrypted": False, "desc": "Allow unknown video duration"},
     SETTING_CACHE_HIT_BYPASSES_DURATION_LIMIT: {"attr": "CACHE_HIT_BYPASSES_DURATION_LIMIT", "type": bool, "encrypted": False, "desc": "Cache hit bypasses duration limit"},
     SETTING_MAX_CONCURRENT_PER_USER: {"attr": "MAX_CONCURRENT_PER_USER", "type": int, "encrypted": False, "desc": "Max concurrent processing jobs per user"},

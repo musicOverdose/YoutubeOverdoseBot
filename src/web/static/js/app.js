@@ -855,6 +855,7 @@ async function testAI() {
 async function loadSettings() {
   const data = await API.get('/api/settings');
   const elHeight = document.getElementById('set-max-height');
+  const elClipDur = document.getElementById('set-max-clip-duration');
   const elPlaylists = document.getElementById('set-playlists-toggle');
   const elMp3 = document.getElementById('set-mp3-toggle');
   const elSubs = document.getElementById('set-subs-toggle');
@@ -868,6 +869,7 @@ async function loadSettings() {
   const elMaintMsg = document.getElementById('set-maint-msg');
 
   if (elHeight) elHeight.value = data.default_max_height ?? 1080;
+  if (elClipDur) elClipDur.value = Math.round((data.max_clip_duration_seconds ?? 900) / 60);
   if (elPlaylists) elPlaylists.checked = data.playlists_enabled ?? false;
   if (elMp3) elMp3.checked = data.mp3_enabled ?? true;
   if (elSubs) elSubs.checked = data.subtitles_enabled ?? true;
@@ -901,8 +903,10 @@ async function saveGlobalSettings(e) {
   const btn = document.getElementById('btn-save-settings');
   setButtonLoading(btn, true, 'Saving Settings…', 'Save Engine Settings');
 
+  const clipMinutes = parseInt(document.getElementById('set-max-clip-duration')?.value || '15', 10);
   const payload = {
     default_max_height: parseInt(document.getElementById('set-max-height')?.value || '1080', 10),
+    max_clip_duration_seconds: (clipMinutes > 0 ? clipMinutes : 15) * 60,
     playlists_enabled: document.getElementById('set-playlists-toggle')?.checked || false,
     mp3_enabled: document.getElementById('set-mp3-toggle')?.checked !== false,
     subtitles_enabled: document.getElementById('set-subs-toggle')?.checked !== false,

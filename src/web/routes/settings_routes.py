@@ -14,6 +14,7 @@ class SettingsUpdateRequest(BaseModel):
     max_video_file_size_mb_local: Optional[int] = None
     max_video_file_size_mb_cloud: Optional[int] = None
     max_video_duration_seconds: Optional[int] = None
+    max_clip_duration_seconds: Optional[int] = None
     allow_unknown_duration: Optional[bool] = None
     cache_hit_bypasses_duration_limit: Optional[bool] = None
     max_concurrent_per_user: int

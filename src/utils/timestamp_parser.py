@@ -55,7 +55,7 @@ def parse_time_token(token: str) -> Optional[int]:
 def parse_timestamp_range(
     text: str,
     source_duration: Optional[int] = None,
-    max_clip_duration: int = 1200,
+    max_clip_duration: int = 900,
     total_duration: Optional[int] = None,
 ) -> Tuple[bool, Optional[int], Optional[int], Optional[str]]:
     """
@@ -66,7 +66,7 @@ def parse_timestamp_range(
       - Start >= 0
       - End > Start
       - End <= source_duration (if source_duration is provided and > 0)
-      - (End - Start) <= max_clip_duration (default 20 minutes / 1200s)
+      - (End - Start) <= max_clip_duration (default 15 minutes / 900s)
 
     Returns:
       (is_valid, start_sec, end_sec, error_message)
@@ -88,7 +88,7 @@ def parse_timestamp_range(
             False,
             None,
             None,
-            "Please use format: start - end (e.g. 1:23 - 3:30)",
+            "Please use format: start - end (e.g. 1:23 - 3:30 or 1:00 - max)",
         )
 
     parts = raw.split(delim, 1)
@@ -101,8 +101,8 @@ def parse_timestamp_range(
     else:
         start_sec = parse_time_token(p0)
 
-    # Parse end token: supports "end", "finish", "last", "max", empty ("1:20 -")
-    if p1 in ("end", "finish", "last", "max") or not p1:
+    # Parse end token: supports "max", empty ("1:20 -")
+    if p1 == "max" or not p1:
         if source_duration is not None and source_duration > 0:
             end_sec = source_duration
         else:
@@ -112,6 +112,13 @@ def parse_timestamp_range(
                 None,
                 "Video length is unknown. Please specify a numeric end time (e.g. 1:23 - 3:30).",
             )
+    elif p1 in ("end", "finish", "last"):
+        return (
+            False,
+            None,
+            None,
+            "Please use 'max' instead of 'end' for the end boundary (e.g. 1:00 - max or start - max).",
+        )
     else:
         end_sec = parse_time_token(p1)
 
@@ -120,7 +127,7 @@ def parse_timestamp_range(
             False,
             None,
             None,
-            "Invalid timestamp. Please use format: start - end (e.g. 1:23 - 3:30 or start - 1:23)",
+            "Invalid timestamp. Please use format: start - end (e.g. 1:23 - 3:30 or 1:00 - max)",
         )
 
     if start_sec < 0:

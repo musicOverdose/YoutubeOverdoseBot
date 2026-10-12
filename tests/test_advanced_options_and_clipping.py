@@ -68,10 +68,15 @@ class TestTimestampParser:
         assert ok is True
         assert (start, end) == (0, 83)
 
-        # "1:20 - end" (within 20 min)
-        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=300)
+        # "1:20 - max" (within 15 min limit)
+        ok, start, end, err = parse_timestamp_range("1:20 - max", source_duration=300)
         assert ok is True
         assert (start, end) == (80, 300)
+
+        # "start - max" (within 15 min limit)
+        ok, start, end, err = parse_timestamp_range("start - max", source_duration=600)
+        assert ok is True
+        assert (start, end) == (0, 600)
 
         # "0 - 1:23"
         ok, start, end, err = parse_timestamp_range("0 - 1:23", source_duration=600)
@@ -88,13 +93,18 @@ class TestTimestampParser:
         assert ok is True
         assert (start, end) == (80, 300)
 
-        # "1:20 - end" exceeding 20 min limit
-        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=3600)
+        # "1:20 - end" must be rejected in favor of max
+        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=300)
+        assert ok is False
+        assert "use 'max' instead of 'end'" in err
+
+        # "1:20 - max" exceeding 15 min limit
+        ok, start, end, err = parse_timestamp_range("1:20 - max", source_duration=3600)
         assert ok is False
         assert "exceeds max limit" in err.lower()
 
-        # "1:20 - end" with unknown duration
-        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=None)
+        # "1:20 - max" with unknown duration
+        ok, start, end, err = parse_timestamp_range("1:20 - max", source_duration=None)
         assert ok is False
         assert "unknown" in err.lower()
 
@@ -366,9 +376,22 @@ class TestClipPrecisionAndProgress:
         assert "⚡️ <b>Please wait...</b>" in text
         assert "65%" in text
         assert "12.4 MB/s • ETA 00:05" in text
+        assert "📥 Downloading" in text
         # Does NOT contain technical jargon
         assert "Remuxing" not in text
         assert "stream copy" not in text
+
+        # Verify processing stage indicator
+        notifier.set_stage("process", label="⚙️ Processing media...")
+        await notifier.update_unified_progress(pct=75.0, force=True)
+        text_proc = bot_mock.edit_message_text.call_args.kwargs.get("text", "")
+        assert "⚙️ Processing media..." in text_proc
+
+        # Verify upload stage indicator
+        notifier.set_stage("upload")
+        await notifier.update_unified_progress(pct=92.0, force=True)
+        text_up = bot_mock.edit_message_text.call_args.kwargs.get("text", "")
+        assert "📤 Uploading to Telegram..." in text_up
 
     @pytest.mark.asyncio
     async def test_back_to_menu_resets_options(self):

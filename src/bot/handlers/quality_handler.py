@@ -558,9 +558,15 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
     chat_id = callback.message.chat.id
     source_id = callback.data.split(":")[1]
 
+    max_clip_duration = getattr(settings, "MAX_CLIP_DURATION_SECONDS", 900)
     async with AsyncSessionLocal() as session:
         if not await MustJoinService.enforce_must_join_callback(callback, bot, session):
             return
+        try:
+            app_settings = await SettingService.get_application_settings(session)
+            max_clip_duration = app_settings.get("max_clip_duration_seconds", max_clip_duration)
+        except Exception:
+            pass
 
     canonical_url = get_canonical_url(source_id)
     try:
@@ -569,11 +575,12 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
     except Exception:
         duration = 0
 
+    max_clip_min = max(1, max_clip_duration // 60)
     prompt_msg = await callback.message.answer(
         "✂️ <b>Enter Clip Range</b>\n\n"
         "Format: <code>start - end</code> (e.g. <code>1:23 - 3:30</code>)\n"
-        "<i>💡 Tip: You can use <code>start - 1:23</code> or <code>1:20 - end</code>\n"
-        "Max length: 20 min • Send /cancel to discard</i>"
+        "<i>💡 Tip: You can use <code>start - max</code> or <code>1:00 - max</code>\n"
+        f"Max length: {max_clip_min} min • Send /cancel to discard</i>"
     )
 
     await state.set_state(AdvancedClipStates.waiting_for_timestamp)
@@ -582,6 +589,7 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
         chat_id=chat_id,
         menu_message_id=callback.message.message_id,
         duration=duration,
+        max_clip_duration=max_clip_duration,
         prompt_msg_id=prompt_msg.message_id,
     )
     await safe_callback_answer(callback)
@@ -596,6 +604,7 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
     source_id = data.get("source_id")
     menu_message_id = data.get("menu_message_id")
     duration = data.get("duration", 0)
+    max_clip_duration = data.get("max_clip_duration", getattr(settings, "MAX_CLIP_DURATION_SECONDS", 900))
 
     # Cancel check
     if message.text and message.text.strip().lower() in ("/cancel", "cancel"):
@@ -611,7 +620,11 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
         await state.clear()
         return
 
-    ok, start_sec, end_sec, err = parse_timestamp_range(message.text or "", source_duration=duration)
+    ok, start_sec, end_sec, err = parse_timestamp_range(
+        message.text or "",
+        source_duration=duration,
+        max_clip_duration=max_clip_duration,
+    )
 
     # Auto-cleanup: delete prompt and user reply
     if prompt_msg_id:
@@ -627,7 +640,7 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
     if not ok:
         err_prompt = await message.answer(
             f"⚠️ {err}\n\n"
-            "Please try again (e.g. <code>1:23 - 3:30</code> or <code>start - 1:23</code>) or send /cancel:"
+            "Please try again (e.g. <code>1:23 - 3:30</code> or <code>1:00 - max</code>) or send /cancel:"
         )
         await state.update_data(prompt_msg_id=err_prompt.message_id)
         return

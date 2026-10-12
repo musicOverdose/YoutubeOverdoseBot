@@ -733,7 +733,7 @@ class JobProcessor:
                             ydl.download([job.canonical_url])
                     await loop.run_in_executor(None, _dl_audio)
 
-                    notifier.set_stage("process")
+                    notifier.set_stage("process", label="🎵 Processing audio...")
 
                     audio_files = [f for f in glob.glob(os.path.join(job_dir, "audio.*")) if not f.endswith((".jpg", ".webp", ".png"))]
                     if not audio_files:
@@ -765,7 +765,7 @@ class JobProcessor:
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()
-                    notifier.set_stage("process")
+                    notifier.set_stage("process", label="🎵 Processing audio...")
 
                     output_mp3 = os.path.join(job_dir, "output.mp3")
                     mp3_ok = await FFmpegService.extract_mp3(

@@ -34,6 +34,7 @@ class StatusNotifier:
         self.current_speed: str = ""
         self.current_eta: str = ""
         self.current_stage: str = "download"  # "download", "process", "upload"
+        self.process_label: str = "⚙️ Processing media..."
         self._ticker_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
 
@@ -57,7 +58,7 @@ class StatusNotifier:
                 pass
         self._ticker_task = None
 
-    def set_stage(self, stage: str) -> None:
+    def set_stage(self, stage: str, label: Optional[str] = None) -> None:
         """
         Transitions the ticker stage:
         - 'download': spans 5% -> 65% (speed & ETA shown)
@@ -65,6 +66,13 @@ class StatusNotifier:
         - 'upload': spans 88% -> 97% (speed & ETA cleared)
         """
         self.current_stage = stage
+        if label:
+            self.process_label = label
+        elif stage == "process" and not getattr(self, "process_label", None):
+            self.process_label = "⚙️ Processing media..."
+        elif stage == "upload":
+            self.process_label = "📤 Uploading to Telegram..."
+
         if stage in ("process", "upload"):
             self.current_speed = ""
             self.current_eta = ""
@@ -179,15 +187,29 @@ class StatusNotifier:
 
         bar_line = render_progress_bar(pct)
         lines = [bar_line]
+
+        stage = getattr(self, "current_stage", "download")
+        process_label = getattr(self, "process_label", "")
+
         stats = []
         if speed:
             stats.append(speed)
         if eta:
             stats.append(f"ETA {eta}")
-        if stats:
-            lines.append(" • ".join(stats))
+
+        if stage == "download":
+            if stats:
+                lines.append(f"📥 Downloading • {' • '.join(stats)}")
+            else:
+                lines.append("📥 Downloading...")
+        elif stage == "process":
+            lines.append(process_label or "⚙️ Processing media...")
+        elif stage == "upload":
+            lines.append("📤 Uploading to Telegram...")
         elif subtitle:
             lines.append(subtitle)
+        elif stats:
+            lines.append(" • ".join(stats))
 
         detail_text = "\n".join(lines)
         await self.update(
