@@ -1,8 +1,9 @@
+import asyncio
 import html
 import json
 import os
 import uuid
-from typing import Optional
+from typing import Optional, Set
 from aiogram import Bot, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -27,6 +28,7 @@ from src.utils.timestamp_parser import format_timestamp, parse_timestamp_range
 
 logger = setup_logger("quality_handler")
 quality_router = Router()
+_background_tasks: Set[asyncio.Task] = set()
 
 
 class AdvancedClipStates(StatesGroup):
@@ -707,13 +709,15 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
     )
 
     async def _auto_delete_confirm(msg_id: int):
-        await asyncio.sleep(4.0)
+        await asyncio.sleep(5.0)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Auto-delete timestamp confirmation failed (message may have been dismissed): %s", e)
 
-    asyncio.create_task(_auto_delete_confirm(confirm_msg.message_id))
+    t = asyncio.create_task(_auto_delete_confirm(confirm_msg.message_id))
+    _background_tasks.add(t)
+    t.add_done_callback(_background_tasks.discard)
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_finish:"))

@@ -501,3 +501,45 @@ class TestClipPrecisionAndProgress:
         # Verify session.execute (which updates hit_count on DB row) was NOT called because id is None
         assert not session_mock.execute.called
 
+    @pytest.mark.asyncio
+    async def test_timestamp_confirmation_auto_delete(self, monkeypatch):
+        import asyncio
+        from src.bot.handlers.quality_handler import on_receive_timestamp_range
+        from aiogram.fsm.context import FSMContext
+        from aiogram.fsm.storage.memory import MemoryStorage
+        from aiogram.fsm.storage.base import StorageKey
+
+        bot_mock = AsyncMock()
+        confirm_msg_mock = AsyncMock()
+        confirm_msg_mock.message_id = 9999
+
+        msg_mock = AsyncMock()
+        msg_mock.chat.id = 12345
+        msg_mock.from_user.id = 67890
+        msg_mock.text = "1:00 - 2:00"
+        msg_mock.answer = AsyncMock(return_value=confirm_msg_mock)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=1, chat_id=12345, user_id=67890)
+        state = FSMContext(storage=storage, key=key)
+        await state.update_data(
+            prompt_msg_id=1111,
+            source_id="test_vid",
+            menu_message_id=2222,
+            duration=300,
+        )
+
+        real_sleep = asyncio.sleep
+        async def fast_sleep(sec):
+            return await real_sleep(0.01)
+        monkeypatch.setattr("src.bot.handlers.quality_handler.asyncio.sleep", fast_sleep)
+        monkeypatch.setattr("src.services.ytdlp_service.YtDlpService.extract_metadata", AsyncMock(return_value={"title": "Test"}))
+
+        import src.bot.handlers.quality_handler as qh
+        await on_receive_timestamp_range(msg_mock, bot_mock, state)
+        if qh._background_tasks:
+            await asyncio.gather(*list(qh._background_tasks))
+
+        delete_calls = [call.kwargs.get("message_id") for call in bot_mock.delete_message.call_args_list]
+        assert 9999 in delete_calls
+
