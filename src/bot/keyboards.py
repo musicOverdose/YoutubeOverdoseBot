@@ -72,8 +72,8 @@ def build_advanced_options_keyboard(
 ) -> InlineKeyboardMarkup:
     """
     ADVANCED OPTIONS CONFIGURATOR KEYBOARD:
-    [ ⏱ Set Timestamp Range ]
-    [ Mute: ON🔇 ]    [ Mode: Video🎬 ]
+    [ ✂️ Set Timestamp Range ]
+    [ Mute: ON🔇 / OFF🔊 ]    [ Mode: Video🎬 / MP3💿 ]
     [ 🔄 Reset Options ]
     [ ✅ Finish ]
     [ 🔙 Back to Menu ]
@@ -82,12 +82,12 @@ def build_advanced_options_keyboard(
         mute_text = "Mute: N/A"
         mode_text = "Mode: MP3💿"
     else:
-        mute_text = "Mute: ON🔇" if is_muted else "Mute: OFF🔇"
+        mute_text = "Mute: ON🔇" if is_muted else "Mute: OFF🔊"
         mode_text = "Mode: Video🎬"
 
     keyboard = [
         [
-            InlineKeyboardButton(text="⏱ Set Timestamp Range", callback_data=f"adv_time:{source_id}"),
+            InlineKeyboardButton(text="✂️ Set Timestamp Range", callback_data=f"adv_time:{source_id}"),
         ],
         [
             InlineKeyboardButton(text=mute_text, callback_data=f"adv_mute:{source_id}"),

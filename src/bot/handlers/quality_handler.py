@@ -76,16 +76,16 @@ def render_advanced_options_card(
     total_dur_str = format_timestamp(duration) if duration else "00:00"
     if clip_start is not None and clip_end is not None:
         clip_len = max(0, clip_end - clip_start)
-        clip_range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)} ({format_timestamp(clip_len)})"
+        clip_range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)} ({format_timestamp(clip_len)}) ✂️"
     else:
         clip_range_str = f"Full ({total_dur_str})"
 
     if mode == "mp3":
         audio_str = "N/A"
-        mode_str = "MP3"
+        mode_str = "MP3 💿"
     else:
-        audio_str = "Muted" if is_muted else "Sound ON"
-        mode_str = "Video"
+        audio_str = "Muted 🔇" if is_muted else "Sound ON 🔊"
+        mode_str = "Video 🎬"
 
     clean_title = html.escape(title[:55])
     return (
@@ -570,7 +570,7 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
         duration = 0
 
     prompt_msg = await callback.message.answer(
-        "⏱ <b>Enter Clip Range</b>\n\n"
+        "✂️ <b>Enter Clip Range</b>\n\n"
         "Format: <code>start - end</code> (e.g. <code>1:23 - 3:30</code>)\n"
         "<i>Max length: 20 min • Send /cancel to discard</i>"
     )
@@ -725,10 +725,10 @@ async def on_advanced_finish(callback: CallbackQuery, bot: Bot):
     )
 
     if clip_start is not None and clip_end is not None:
-        range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)}"
+        range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)} ✂️"
     else:
         range_str = "Full"
-    sound_str = "Muted" if adv_opts.get("is_muted") else "Sound ON"
+    sound_str = "Muted 🔇" if adv_opts.get("is_muted") else "Sound ON 🔊"
 
     text = (
         f"🎬 <b>Select Quality</b>\n\n"

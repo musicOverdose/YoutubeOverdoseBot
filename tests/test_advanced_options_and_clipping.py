@@ -225,9 +225,9 @@ class TestKeyboards:
         # Video mode, unmuted
         kb = build_advanced_options_keyboard("test12345", is_muted=False, mode="video")
         flat = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert "Mute: OFF🔇" in flat
+        assert "Mute: OFF🔊" in flat
         assert "Mode: Video🎬" in flat
-        assert "⏱ Set Timestamp Range" in flat
+        assert "✂️ Set Timestamp Range" in flat
         assert "🔄 Reset Options" in flat
         assert "✅ Finish" in flat
         assert "🔙 Back to Menu" in flat
@@ -256,9 +256,21 @@ class TestKeyboards:
         )
         assert "━━━━━━━━━━━━━━━━━━━" not in card
         assert "🎛 <b>Advanced Options</b>" in card
-        assert "• <b>Clip:</b> 01:00 - 02:00 (01:00)" in card
-        assert "• <b>Audio:</b> Sound ON" in card
-        assert "• <b>Mode:</b> Video" in card
+        assert "• <b>Clip:</b> 01:00 - 02:00 (01:00) ✂️" in card
+        assert "• <b>Audio:</b> Sound ON 🔊" in card
+        assert "• <b>Mode:</b> Video 🎬" in card
+
+        card_muted = render_advanced_options_card(
+            title="Sample YouTube Video",
+            duration=300,
+            clip_start=None,
+            clip_end=None,
+            is_muted=True,
+            mode="video",
+        )
+        assert "• <b>Clip:</b> Full (05:00)" in card_muted
+        assert "• <b>Audio:</b> Muted 🔇" in card_muted
+        assert "• <b>Mode:</b> Video 🎬" in card_muted
 
     def test_advanced_quality_keyboard_labels(self):
         kb = build_advanced_quality_keyboard(
