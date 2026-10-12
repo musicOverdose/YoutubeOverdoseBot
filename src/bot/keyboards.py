@@ -73,16 +73,17 @@ def build_advanced_options_keyboard(
     """
     ADVANCED OPTIONS CONFIGURATOR KEYBOARD:
     [ ⏱ Set Timestamp Range ]
-    [ 🔇 Mute Audio: OFF/ON ]   [ 📦 Mode: 🎬 Video / 💿 MP3 ]
+    [ Mute: ON🔇 ]    [ Mode: Video🎬 ]
     [ 🔄 Reset Options ]
-    [ ☑️ Finish ]
+    [ ✅ Finish ]
     [ 🔙 Back to Menu ]
     """
-    mode_text = "🎬 Video" if mode == "video" else "💿 MP3"
     if mode == "mp3":
-        mute_text = "🔇 Mute: N/A"
+        mute_text = "Mute: N/A"
+        mode_text = "Mode: MP3💿"
     else:
-        mute_text = "🔇 Mute: ON" if is_muted else "🔇 Mute: OFF"
+        mute_text = "Mute: ON🔇" if is_muted else "Mute: OFF🔇"
+        mode_text = "Mode: Video🎬"
 
     keyboard = [
         [
@@ -90,13 +91,13 @@ def build_advanced_options_keyboard(
         ],
         [
             InlineKeyboardButton(text=mute_text, callback_data=f"adv_mute:{source_id}"),
-            InlineKeyboardButton(text=f"📦 Mode: {mode_text}", callback_data=f"adv_mode:{source_id}"),
+            InlineKeyboardButton(text=mode_text, callback_data=f"adv_mode:{source_id}"),
         ],
         [
             InlineKeyboardButton(text="🔄 Reset Options", callback_data=f"adv_undo:{source_id}"),
         ],
         [
-            InlineKeyboardButton(text="☑️ Finish", callback_data=f"adv_finish:{source_id}"),
+            InlineKeyboardButton(text="✅ Finish", callback_data=f"adv_finish:{source_id}"),
         ],
         [
             InlineKeyboardButton(text="🔙 Back to Menu", callback_data=f"adv_back:{source_id}"),

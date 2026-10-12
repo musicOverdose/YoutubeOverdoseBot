@@ -31,28 +31,47 @@ class TestTimestampParser:
         assert parse_time_token("-5") is None
 
     def test_parse_timestamp_range_valid(self):
-        # Delimiter '-'
+        # Delimiter ' - '
         ok, start, end, err = parse_timestamp_range("1:23 - 3:30", source_duration=600)
         assert ok is True
         assert (start, end) == (83, 210)
         assert err is None
 
-        # Delimiter whitespace
-        ok, start, end, err = parse_timestamp_range("01:23 03:30", source_duration=600)
+        # Delimiter '-' without spaces
+        ok, start, end, err = parse_timestamp_range("01:23-03:30", source_duration=600)
         assert ok is True
         assert (start, end) == (83, 210)
 
-        # Delimiter 'to'
-        ok, start, end, err = parse_timestamp_range("45s to 2m", source_duration=600)
+        # En-dash ' – '
+        ok, start, end, err = parse_timestamp_range("1:23 – 3:30", source_duration=600)
+        assert ok is True
+        assert (start, end) == (83, 210)
+
+        # Em-dash ' — '
+        ok, start, end, err = parse_timestamp_range("1:23 — 3:30", source_duration=600)
+        assert ok is True
+        assert (start, end) == (83, 210)
+
+        # Units with '-'
+        ok, start, end, err = parse_timestamp_range("45s - 2m", source_duration=600)
         assert ok is True
         assert (start, end) == (45, 120)
 
-        # Raw seconds
+        # Raw seconds with '-'
         ok, start, end, err = parse_timestamp_range("75 - 210", source_duration=600)
         assert ok is True
         assert (start, end) == (75, 210)
 
     def test_parse_timestamp_range_errors(self):
+        # Missing hyphen delimiter (whitespace or 'to' must be rejected)
+        ok, _, _, err = parse_timestamp_range("01:23 03:30", source_duration=600)
+        assert ok is False
+        assert "start - end" in err
+
+        ok, _, _, err = parse_timestamp_range("45s to 2m", source_duration=600)
+        assert ok is False
+        assert "start - end" in err
+
         # Start >= End
         ok, start, end, err = parse_timestamp_range("3:30 - 1:23", source_duration=600)
         assert ok is False
@@ -65,12 +84,12 @@ class TestTimestampParser:
         # Exceeds max clip duration (20 min = 1200 sec)
         ok, start, end, err = parse_timestamp_range("0:00 - 25:00", source_duration=3600)
         assert ok is False
-        assert "exceeds the maximum allowed limit" in err.lower()
+        assert "exceeds max limit" in err.lower()
 
         # Exceeds video duration
         ok, start, end, err = parse_timestamp_range("1:00 - 5:00", source_duration=200)
         assert ok is False
-        assert "exceeds the video duration" in err.lower()
+        assert "exceeds video length" in err.lower()
 
     def test_format_timestamp(self):
         assert format_timestamp(0) == "00:00"
@@ -206,19 +225,40 @@ class TestKeyboards:
         # Video mode, unmuted
         kb = build_advanced_options_keyboard("test12345", is_muted=False, mode="video")
         flat = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert "🔇 Mute: OFF" in flat
-        assert "📦 Mode: 🎬 Video" in flat
+        assert "Mute: OFF🔇" in flat
+        assert "Mode: Video🎬" in flat
+        assert "⏱ Set Timestamp Range" in flat
+        assert "🔄 Reset Options" in flat
+        assert "✅ Finish" in flat
+        assert "🔙 Back to Menu" in flat
 
         # Video mode, muted
         kb_muted = build_advanced_options_keyboard("test12345", is_muted=True, mode="video")
         flat_muted = [btn.text for row in kb_muted.inline_keyboard for btn in row]
-        assert "🔇 Mute: ON" in flat_muted
+        assert "Mute: ON🔇" in flat_muted
+        assert "Mode: Video🎬" in flat_muted
 
         # MP3 mode
         kb_mp3 = build_advanced_options_keyboard("test12345", is_muted=True, mode="mp3")
         flat_mp3 = [btn.text for row in kb_mp3.inline_keyboard for btn in row]
-        assert "🔇 Mute: N/A" in flat_mp3
-        assert "📦 Mode: 💿 MP3" in flat_mp3
+        assert "Mute: N/A" in flat_mp3
+        assert "Mode: MP3💿" in flat_mp3
+
+    def test_render_advanced_options_card(self):
+        from src.bot.handlers.quality_handler import render_advanced_options_card
+        card = render_advanced_options_card(
+            title="Sample YouTube Video",
+            duration=300,
+            clip_start=60,
+            clip_end=120,
+            is_muted=False,
+            mode="video",
+        )
+        assert "━━━━━━━━━━━━━━━━━━━" not in card
+        assert "🎛 <b>Advanced Options</b>" in card
+        assert "• <b>Clip:</b> 01:00 - 02:00 (01:00)" in card
+        assert "• <b>Audio:</b> Sound ON" in card
+        assert "• <b>Mode:</b> Video" in card
 
     def test_advanced_quality_keyboard_labels(self):
         kb = build_advanced_quality_keyboard(

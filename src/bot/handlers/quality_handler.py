@@ -76,27 +76,24 @@ def render_advanced_options_card(
     total_dur_str = format_timestamp(duration) if duration else "00:00"
     if clip_start is not None and clip_end is not None:
         clip_len = max(0, clip_end - clip_start)
-        clip_range_str = f"{format_timestamp(clip_start)} ➔ {format_timestamp(clip_end)} (Length: {format_timestamp(clip_len)})"
+        clip_range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)} ({format_timestamp(clip_len)})"
     else:
-        clip_range_str = f"00:00 ➔ {total_dur_str} (Full Video)"
+        clip_range_str = f"Full ({total_dur_str})"
 
     if mode == "mp3":
-        audio_str = "N/A (MP3 Audio Mode)"
-        mode_str = "💿 MP3"
+        audio_str = "N/A"
+        mode_str = "MP3"
     else:
-        audio_str = "🔇 Muted (Sound OFF)" if is_muted else "🔊 Normal (Sound ON)"
-        mode_str = "🎬 Video"
+        audio_str = "Muted" if is_muted else "Sound ON"
+        mode_str = "Video"
 
-    clean_title = html.escape(title[:60])
+    clean_title = html.escape(title[:55])
     return (
-        f"🎛 <b>Advanced Download Options</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🎬 <b>{clean_title}</b> ({total_dur_str})\n\n"
-        f"⏱ <b>Clip Range:</b>  {clip_range_str}\n"
-        f"🔊 <b>Audio:</b>       {audio_str}\n"
-        f"📦 <b>Format:</b>      {mode_str}\n\n"
-        f"Adjust options below, then select quality to download:\n"
-        f"━━━━━━━━━━━━━━━━━━━"
+        f"🎛 <b>Advanced Options</b>\n"
+        f"<b>{clean_title}</b> ({total_dur_str})\n\n"
+        f"• <b>Clip:</b> {clip_range_str}\n"
+        f"• <b>Audio:</b> {audio_str}\n"
+        f"• <b>Mode:</b> {mode_str}"
     )
 
 
@@ -462,7 +459,7 @@ async def on_toggle_mute(callback: CallbackQuery, bot: Bot):
         mode=adv_opts.get("mode", "video"),
     )
     await safe_edit_menu(callback.message, card_text, reply_markup=kb)
-    await safe_callback_answer(callback, "Mute: ON (Sound OFF)" if new_mute else "Mute: OFF (Sound ON)")
+    await safe_callback_answer(callback, "Mute: ON" if new_mute else "Mute: OFF")
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_mode:"))
@@ -506,7 +503,7 @@ async def on_toggle_mode(callback: CallbackQuery, bot: Bot):
         mode=new_mode,
     )
     await safe_edit_menu(callback.message, card_text, reply_markup=kb)
-    await safe_callback_answer(callback, f"Mode: {'💿 MP3 Audio' if new_mode == 'mp3' else '🎬 Video'}")
+    await safe_callback_answer(callback, f"Mode: {'MP3' if new_mode == 'mp3' else 'Video'}")
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_undo:"))
@@ -573,14 +570,9 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
         duration = 0
 
     prompt_msg = await callback.message.answer(
-        "⏱ <b>Enter Timestamp Range</b>\n\n"
-        "Send the start and end timestamp for your clip (maximum 20 minutes):\n\n"
-        "<b>Examples:</b>\n"
-        "• <code>1:23 - 3:30</code>\n"
-        "• <code>01:23 03:30</code>\n"
-        "• <code>45s - 2m</code>\n"
-        "• <code>75 - 210</code>\n\n"
-        "<i>Send /cancel to discard.</i>"
+        "⏱ <b>Enter Clip Range</b>\n\n"
+        "Format: <code>start - end</code> (e.g. <code>1:23 - 3:30</code>)\n"
+        "<i>Max length: 20 min • Send /cancel to discard</i>"
     )
 
     await state.set_state(AdvancedClipStates.waiting_for_timestamp)
@@ -633,7 +625,7 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
 
     if not ok:
         err_prompt = await message.answer(
-            f"❌ <b>Invalid timestamp:</b> {err}\n\n"
+            f"⚠️ {err}\n\n"
             "Please try again (e.g. <code>1:23 - 3:30</code>) or send /cancel:"
         )
         await state.update_data(prompt_msg_id=err_prompt.message_id)
@@ -733,17 +725,16 @@ async def on_advanced_finish(callback: CallbackQuery, bot: Bot):
     )
 
     if clip_start is not None and clip_end is not None:
-        range_str = f"{format_timestamp(clip_start)} ➔ {format_timestamp(clip_end)}"
+        range_str = f"{format_timestamp(clip_start)} - {format_timestamp(clip_end)}"
     else:
-        range_str = "Full Video"
-    sound_str = "🔇 Muted" if adv_opts.get("is_muted") else "🔊 Sound ON"
+        range_str = "Full"
+    sound_str = "Muted" if adv_opts.get("is_muted") else "Sound ON"
 
     text = (
-        f"🎬 <b>Select Video Quality</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ <b>Range:</b>  {range_str}\n"
-        f"🔊 <b>Audio:</b>  {sound_str}\n\n"
-        f"Choose your preferred resolution:"
+        f"🎬 <b>Select Quality</b>\n\n"
+        f"• <b>Clip:</b> {range_str}\n"
+        f"• <b>Audio:</b> {sound_str}\n\n"
+        f"Choose resolution:"
     )
     await safe_edit_menu(callback.message, text, reply_markup=kb)
     await safe_callback_answer(callback)

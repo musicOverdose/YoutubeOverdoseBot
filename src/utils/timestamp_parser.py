@@ -60,7 +60,7 @@ def parse_timestamp_range(
 ) -> Tuple[bool, Optional[int], Optional[int], Optional[str]]:
     """
     Parses a user input string into start_seconds and end_seconds.
-    Supports delimiters: " - ", " to ", " till ", " until ", "-", "–", "—", or space.
+    Strictly requires hyphen delimiters: " - ", "-", "–", or "—".
 
     Validates:
       - Start >= 0
@@ -77,35 +77,30 @@ def parse_timestamp_range(
         return False, None, None, "Please provide start and end timestamps (e.g. 1:23 - 3:30)."
 
     raw = text.strip()
-    start_sec: Optional[int] = None
-    end_sec: Optional[int] = None
+    delim = None
+    for d in [" - ", " – ", " — ", "-", "–", "—"]:
+        if d in raw:
+            delim = d
+            break
 
-    # Delimiters with priority
-    delimiters = [" - ", " to ", " till ", " until ", "-", "–", "—"]
-    for delim in delimiters:
-        if delim in raw:
-            parts = raw.split(delim, 1)
-            s = parse_time_token(parts[0])
-            e = parse_time_token(parts[1])
-            if s is not None and e is not None:
-                start_sec, end_sec = s, e
-                break
+    if not delim:
+        return (
+            False,
+            None,
+            None,
+            "Please use format: start - end (e.g. 1:23 - 3:30)",
+        )
 
-    # Whitespace fallback (e.g. "01:23 03:30" or "45 120")
-    if start_sec is None or end_sec is None:
-        parts = raw.split()
-        if len(parts) == 2:
-            s = parse_time_token(parts[0])
-            e = parse_time_token(parts[1])
-            if s is not None and e is not None:
-                start_sec, end_sec = s, e
+    parts = raw.split(delim, 1)
+    start_sec = parse_time_token(parts[0])
+    end_sec = parse_time_token(parts[1])
 
     if start_sec is None or end_sec is None:
         return (
             False,
             None,
             None,
-            "Invalid timestamp format. Examples: <code>1:23 - 3:30</code> or <code>0:45 2:10</code>",
+            "Invalid timestamp. Please use format: start - end (e.g. 1:23 - 3:30)",
         )
 
     if start_sec < 0:
@@ -126,7 +121,7 @@ def parse_timestamp_range(
             False,
             None,
             None,
-            f"Requested clip duration ({format_timestamp(clip_len)}) exceeds the maximum allowed limit of {max_min} minutes.",
+            f"Clip duration ({format_timestamp(clip_len)}) exceeds max limit of {max_min} minutes.",
         )
 
     if source_duration is not None and source_duration > 0:
@@ -135,7 +130,7 @@ def parse_timestamp_range(
                 False,
                 None,
                 None,
-                f"End time ({format_timestamp(end_sec)}) exceeds the video duration ({format_timestamp(source_duration)}).",
+                f"End time ({format_timestamp(end_sec)}) exceeds video length ({format_timestamp(source_duration)}).",
             )
 
     return True, start_sec, end_sec, None
