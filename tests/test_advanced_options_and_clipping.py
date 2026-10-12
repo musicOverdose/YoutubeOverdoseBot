@@ -62,6 +62,42 @@ class TestTimestampParser:
         assert ok is True
         assert (start, end) == (75, 210)
 
+    def test_parse_timestamp_range_keywords(self):
+        # "start - 1:23"
+        ok, start, end, err = parse_timestamp_range("start - 1:23", source_duration=600)
+        assert ok is True
+        assert (start, end) == (0, 83)
+
+        # "1:20 - end" (within 20 min)
+        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=300)
+        assert ok is True
+        assert (start, end) == (80, 300)
+
+        # "0 - 1:23"
+        ok, start, end, err = parse_timestamp_range("0 - 1:23", source_duration=600)
+        assert ok is True
+        assert (start, end) == (0, 83)
+
+        # "- 1:23" (empty start)
+        ok, start, end, err = parse_timestamp_range("- 1:23", source_duration=600)
+        assert ok is True
+        assert (start, end) == (0, 83)
+
+        # "1:20 -" (empty end)
+        ok, start, end, err = parse_timestamp_range("1:20 -", source_duration=300)
+        assert ok is True
+        assert (start, end) == (80, 300)
+
+        # "1:20 - end" exceeding 20 min limit
+        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=3600)
+        assert ok is False
+        assert "exceeds max limit" in err.lower()
+
+        # "1:20 - end" with unknown duration
+        ok, start, end, err = parse_timestamp_range("1:20 - end", source_duration=None)
+        assert ok is False
+        assert "unknown" in err.lower()
+
     def test_parse_timestamp_range_errors(self):
         # Missing hyphen delimiter (whitespace or 'to' must be rejected)
         ok, _, _, err = parse_timestamp_range("01:23 03:30", source_duration=600)

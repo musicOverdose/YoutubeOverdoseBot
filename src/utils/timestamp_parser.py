@@ -92,15 +92,35 @@ def parse_timestamp_range(
         )
 
     parts = raw.split(delim, 1)
-    start_sec = parse_time_token(parts[0])
-    end_sec = parse_time_token(parts[1])
+    p0 = parts[0].strip().lower()
+    p1 = parts[1].strip().lower()
+
+    # Parse start token: supports "start", "beginning", "0", empty ("- 1:23")
+    if p0 in ("start", "beginning", "begin", "0", "00:00", "0:00") or not p0:
+        start_sec = 0
+    else:
+        start_sec = parse_time_token(p0)
+
+    # Parse end token: supports "end", "finish", "last", "max", empty ("1:20 -")
+    if p1 in ("end", "finish", "last", "max") or not p1:
+        if source_duration is not None and source_duration > 0:
+            end_sec = source_duration
+        else:
+            return (
+                False,
+                None,
+                None,
+                "Video length is unknown. Please specify a numeric end time (e.g. 1:23 - 3:30).",
+            )
+    else:
+        end_sec = parse_time_token(p1)
 
     if start_sec is None or end_sec is None:
         return (
             False,
             None,
             None,
-            "Invalid timestamp. Please use format: start - end (e.g. 1:23 - 3:30)",
+            "Invalid timestamp. Please use format: start - end (e.g. 1:23 - 3:30 or start - 1:23)",
         )
 
     if start_sec < 0:

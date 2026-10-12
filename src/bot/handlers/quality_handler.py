@@ -572,7 +572,8 @@ async def on_prompt_timestamp_range(callback: CallbackQuery, bot: Bot, state: FS
     prompt_msg = await callback.message.answer(
         "✂️ <b>Enter Clip Range</b>\n\n"
         "Format: <code>start - end</code> (e.g. <code>1:23 - 3:30</code>)\n"
-        "<i>Max length: 20 min • Send /cancel to discard</i>"
+        "<i>💡 Tip: You can use <code>start - 1:23</code> or <code>1:20 - end</code>\n"
+        "Max length: 20 min • Send /cancel to discard</i>"
     )
 
     await state.set_state(AdvancedClipStates.waiting_for_timestamp)
@@ -626,7 +627,7 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
     if not ok:
         err_prompt = await message.answer(
             f"⚠️ {err}\n\n"
-            "Please try again (e.g. <code>1:23 - 3:30</code>) or send /cancel:"
+            "Please try again (e.g. <code>1:23 - 3:30</code> or <code>start - 1:23</code>) or send /cancel:"
         )
         await state.update_data(prompt_msg_id=err_prompt.message_id)
         return
@@ -675,6 +676,23 @@ async def on_receive_timestamp_range(message: Message, bot: Bot, state: FSMConte
             )
         except Exception as e:
             logger.warning("Could not edit menu message with new timestamp range: %s", e)
+
+    # Inform user that timestamp has been set
+    clip_len_str = format_timestamp(end_sec - start_sec)
+    confirm_msg = await message.answer(
+        f"✅ <b>Clip range set:</b> {format_timestamp(start_sec)} ➔ {format_timestamp(end_sec)} "
+        f"<i>({clip_len_str})</i>\n"
+        f"<i>Updated in menu above ⬆️</i>"
+    )
+
+    async def _auto_delete_confirm(msg_id: int):
+        await asyncio.sleep(4.0)
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+
+    asyncio.create_task(_auto_delete_confirm(confirm_msg.message_id))
 
 
 @quality_router.callback_query(lambda c: c.data and c.data.startswith("adv_finish:"))
