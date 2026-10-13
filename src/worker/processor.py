@@ -498,13 +498,10 @@ class JobProcessor:
                         except Exception as fe:
                             logger.debug("Could not convert found_thumb_file to cover: %s", fe)
 
-                    # Hybrid Thumbnail Selection:
-                    # If this is a cut clip, extract a representative frame directly from the cut video stream
-                    # Otherwise, check resolution fidelity of downloaded cover vs native video
+                    # Hybrid Thumbnail Selection for full videos:
+                    # Check resolution fidelity of downloaded cover vs native video
                     use_frame_extraction = False
-                    if is_clip:
-                        use_frame_extraction = True
-                    elif early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
+                    if not is_clip and early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
                         # Video is HD (>= 720p). If cover art is low-res (e.g. YouTube auto-generated 480p pillarbox),
                         # extract crystal-clear native frame directly from the HD video stream!
                         if cover_downloaded and os.path.exists(raw_cover_path):
@@ -523,7 +520,7 @@ class JobProcessor:
                         else:
                             use_frame_extraction = True
 
-                    if use_frame_extraction:
+                    if use_frame_extraction and not is_clip:
                         try:
                             frame_ok = await ThumbnailService.extract_frame_fallback(
                                 video_path=input_file,
@@ -547,7 +544,7 @@ class JobProcessor:
                         output_path=output_file,
                         target_codec=target_codec,
                         target_height=target_height,
-                        cover_image_path=raw_cover_path if cover_downloaded else None,
+                        cover_image_path=None if is_clip else (raw_cover_path if cover_downloaded else None),
                         prepend_thumbnail=False if is_clip else True,
                         is_muted=is_muted,
                         clip_offset=clip_offset,
@@ -569,44 +566,45 @@ class JobProcessor:
                         logger.error("Failed to extract valid video metadata from final file: %s", meta_err)
                         raise ValueError(f"Could not extract valid video metadata: {meta_err}") from meta_err
 
-                    # 3. Generate high-fidelity JPEG thumbnail for Telegram chat bubble (320px Lanczos + sharpened)
-                    thumb_path = os.path.join(job_dir, "thumbnail.jpg")
-                    thumb_ok = False
-                    target_ratio = (width / float(height)) if is_vertical and height > 0 else None
-
-                    if cover_downloaded and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
-                        thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
-                            source_image_path=raw_cover_path,
-                            output_thumb_path=thumb_path,
-                            is_vertical=is_vertical,
-                            target_ratio=target_ratio,
-                        )
-
-                    if not thumb_ok:
-                        try:
-                            thumb_ok = await ThumbnailService.prepare_video_thumbnail(
-                                video_path=output_file,
-                                output_thumb_path=thumb_path,
-                                source_thumb_path=found_thumb_file,
-                                source_thumb_urls=candidate_thumb_urls,
-                                duration=duration,
-                                is_vertical=is_vertical,
-                                target_ratio=target_ratio,
-                            )
-                        except Exception as thumb_err:
-                            logger.warning("Thumbnail generation error: %s", thumb_err)
-                            thumb_ok = False
-
                     extra_kwargs = {
                         "supports_streaming": True,
                         "duration": duration,
                         "width": width,
                         "height": height,
                     }
-                    if thumb_ok and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
-                        extra_kwargs["thumbnail"] = FSInputFile(thumb_path)
-                    else:
-                        logger.warning("Sending video without thumbnail because thumbnail generation failed or returned empty")
+
+                    # 3. For full videos, generate high-fidelity JPEG thumbnail for Telegram chat bubble.
+                    # For clips, omit custom thumbnail so users receive pure trimmed stream with 0 extra frames.
+                    if not is_clip:
+                        thumb_path = os.path.join(job_dir, "thumbnail.jpg")
+                        thumb_ok = False
+                        target_ratio = (width / float(height)) if is_vertical and height > 0 else None
+
+                        if cover_downloaded and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                            thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
+                                source_image_path=raw_cover_path,
+                                output_thumb_path=thumb_path,
+                                is_vertical=is_vertical,
+                                target_ratio=target_ratio,
+                            )
+
+                        if not thumb_ok:
+                            try:
+                                thumb_ok = await ThumbnailService.prepare_video_thumbnail(
+                                    video_path=output_file,
+                                    output_thumb_path=thumb_path,
+                                    source_thumb_path=found_thumb_file,
+                                    source_thumb_urls=candidate_thumb_urls,
+                                    duration=duration,
+                                    is_vertical=is_vertical,
+                                    target_ratio=target_ratio,
+                                )
+                            except Exception as thumb_err:
+                                logger.warning("Thumbnail generation error: %s", thumb_err)
+                                thumb_ok = False
+
+                        if thumb_ok and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+                            extra_kwargs["thumbnail"] = FSInputFile(thumb_path)
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()

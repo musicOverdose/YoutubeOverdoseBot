@@ -1,3 +1,4 @@
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.cache_service import CacheService
@@ -542,4 +543,56 @@ class TestClipPrecisionAndProgress:
 
         delete_calls = [call.kwargs.get("message_id") for call in bot_mock.delete_message.call_args_list]
         assert 9999 in delete_calls
+
+    @pytest.mark.asyncio
+    async def test_trimmed_clip_has_no_thumbnail_streams_or_extra_frames(self, tmp_path):
+        """
+        Verifies that trimmed clips processed by FFmpegService with cover_image_path=None
+        and prepend_thumbnail=False contain strictly 1 video stream (0 attached_pic streams)
+        and zero injected thumbnail frames.
+        """
+        import subprocess
+        from src.services.ffmpeg_service import FFmpegService
+
+        in_file = str(tmp_path / "clip_source.mp4")
+        out_file = str(tmp_path / "clip_out.mp4")
+
+        # Create a synthetic 5-second video
+        cmd_gen = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+            "-t", "5",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            in_file
+        ]
+        proc = subprocess.run(cmd_gen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.returncode == 0
+
+        # Process as a 2-second clip with no cover and prepend_thumbnail=False
+        ok = await FFmpegService.process_video(
+            input_path=in_file,
+            output_path=out_file,
+            target_codec="H264",
+            target_height=360,
+            cover_image_path=None,
+            prepend_thumbnail=False,
+            clip_offset=1.0,
+            clip_duration=2.0,
+        )
+        assert ok is True
+        assert os.path.exists(out_file)
+
+        # Probe streams in output file: must have exactly 1 video stream, NO attached_pic
+        probe = await FFmpegService.probe_file(out_file)
+        streams = probe.get("streams", [])
+        v_streams = [s for s in streams if s.get("codec_type") == "video"]
+        assert len(v_streams) == 1, f"Expected exactly 1 video stream (0 attached_pic), got {len(v_streams)}"
+        assert v_streams[0].get("disposition", {}).get("attached_pic", 0) == 0
+
+        # Check duration is approximately 2.0s
+        duration = float(probe.get("format", {}).get("duration", 0))
+        assert 1.8 <= duration <= 2.2
+
 
