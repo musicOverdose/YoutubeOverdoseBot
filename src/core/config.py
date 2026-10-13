@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     YTDLP_PROXY: Optional[str] = Field(default=None)
     YTDLP_COOKIES_FILE: str = Field(default="/config/secrets/youtube-cookies.txt")
     YTDLP_COOKIES_ENABLED: bool = Field(default=False)
+    YTDLP_PO_TOKEN: Optional[str] = Field(default=None)
 
     # Logging & Paths
     LOG_LEVEL: str = Field(default="INFO")

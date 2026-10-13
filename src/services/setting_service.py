@@ -80,6 +80,7 @@ SETTING_AI_CHUNK_SIZE = "ai_chunk_size"
 # Additional Audited Runtime Setting Keys
 SETTING_YTDLP_COOKIES_ENABLED = "ytdlp_cookies_enabled"
 SETTING_YTDLP_PROXY = "ytdlp_proxy"
+SETTING_YTDLP_PO_TOKEN = "ytdlp_po_token"
 SETTING_MUST_JOIN_ENABLED = "must_join_enabled"
 SETTING_MUST_JOIN_EXEMPT_USERS = "must_join_exempt_users"
 SETTING_MAX_ACTIVE_JOBS = "max_active_jobs"
@@ -112,6 +113,7 @@ APP_SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
     SETTING_AI_CHUNK_SIZE: {"attr": "AI_CHUNK_SIZE", "type": int, "encrypted": False, "desc": "Subtitle segment chunk size for AI translation"},
     SETTING_YTDLP_COOKIES_ENABLED: {"attr": "YTDLP_COOKIES_ENABLED", "type": bool, "encrypted": False, "desc": "YouTube cookies enabled"},
     SETTING_YTDLP_PROXY: {"attr": "YTDLP_PROXY", "type": str, "encrypted": False, "desc": "Proxy URL for yt-dlp"},
+    SETTING_YTDLP_PO_TOKEN: {"attr": "YTDLP_PO_TOKEN", "type": str, "encrypted": False, "desc": "Proof-of-Origin (PO) Token for yt-dlp anti-bot bypass"},
     SETTING_MUST_JOIN_ENABLED: {"attr": "MUST_JOIN_ENABLED", "type": bool, "encrypted": False, "desc": "Must-join channels enforcement enabled"},
     SETTING_MUST_JOIN_EXEMPT_USERS: {"attr": "MUST_JOIN_EXEMPT_USERS", "type": str, "encrypted": False, "desc": "Must-join exempt user IDs and usernames"},
     SETTING_MAX_ACTIVE_JOBS: {"attr": "MAX_ACTIVE_JOBS", "type": int, "encrypted": False, "desc": "Max active worker processing jobs"},

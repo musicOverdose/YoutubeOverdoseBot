@@ -33,6 +33,14 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
             pass
         return
 
+    # Reject livestreams early with friendly notification
+    if info.get("is_live") or info.get("live_status") == "is_live":
+        try:
+            await status_msg.edit_text("❌ Livestreams are not supported. Please provide a link to a recorded video.")
+        except Exception:
+            pass
+        return
+
     # Usable resolutions and friendly display labels
     max_height = getattr(settings, "DEFAULT_MAX_HEIGHT", 2160)
     try:

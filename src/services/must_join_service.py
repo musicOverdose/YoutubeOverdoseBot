@@ -297,6 +297,38 @@ class MustJoinService:
             return None
 
     @classmethod
+    async def resolve_missing_invite_links(
+        cls, bot: Bot, session: AsyncSession, channels: List[RequiredChannel]
+    ) -> None:
+        """
+        Dynamically auto-resolves invite links for private or username-less channels from Telegram API.
+        Persists newly resolved invite URLs to the database for future requests.
+        """
+        changed = False
+        for ch in channels:
+            has_valid_url = (
+                (ch.invite_url and ch.invite_url.strip().startswith(("http://", "https://")))
+                or (ch.username and ch.username.strip().lstrip("@"))
+            )
+            if not has_valid_url and ch.chat_id:
+                try:
+                    chat = await bot.get_chat(ch.chat_id)
+                    link = chat.invite_link
+                    if not link and chat.username:
+                        link = f"https://t.me/{chat.username}"
+                    if link:
+                        ch.invite_url = link
+                        changed = True
+                        logger.info("Auto-resolved invite link for channel %s: %s", ch.chat_id, link)
+                except Exception as e:
+                    logger.debug("Failed to auto-resolve invite link for channel %s: %s", ch.chat_id, e)
+        if changed:
+            try:
+                await session.commit()
+            except Exception as e:
+                logger.debug("Failed to commit resolved invite URLs: %s", e)
+
+    @classmethod
     async def enforce_must_join_message(
         cls,
         message: Message,
@@ -324,6 +356,7 @@ class MustJoinService:
             payload = pending_action.get("payload", {})
             await cls.save_pending_action(user_id=user_id, chat_id=chat_id, action_type=action_type, payload=payload)
 
+        await cls.resolve_missing_invite_links(bot, session, missing_channels)
         kb = build_must_join_keyboard(missing_channels)
         first_name = message.from_user.first_name if message.from_user else None
         text = await cls.get_rendered_must_join_message(session, first_name, missing_channels)
@@ -369,6 +402,7 @@ class MustJoinService:
             payload = pending_action.get("payload", {})
             await cls.save_pending_action(user_id=user_id, chat_id=chat_id, action_type=action_type, payload=payload)
 
+        await cls.resolve_missing_invite_links(bot, session, missing_channels)
         kb = build_must_join_keyboard(missing_channels)
         await callback.answer("🔒 You must join the required channels to proceed.", show_alert=True)
         if callback.message:

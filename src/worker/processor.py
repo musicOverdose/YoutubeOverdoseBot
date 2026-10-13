@@ -4,6 +4,7 @@ import glob
 import os
 from pathlib import Path
 import shutil
+import threading
 from typing import Dict, List, Optional, Tuple
 from aiogram import Bot
 from aiogram.types import FSInputFile
@@ -293,6 +294,20 @@ class JobProcessor:
                     is_clip = (job.clip_start is not None and job.clip_end is not None)
 
                     info = await YtDlpService.extract_metadata(job.canonical_url)
+                    if info.get("is_live") or info.get("live_status") == "is_live":
+                        logger.warning("Job %s rejected: stream is live", job_id)
+                        await notifier.stop_ticker()
+                        job.status = JobStatus.FAILED.value
+                        job.error_code = "LIVESTREAM_NOT_SUPPORTED"
+                        job.error_message = "Livestreams are not supported."
+                        await session.commit()
+                        await notifier.update("❌", "Failed", "Livestreams are not supported.", force=True)
+                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                        if own_bot and bot is not None:
+                            await bot.session.close()
+                        return
+
                     expected_bytes, size_source, size_details = YtDlpService.calculate_expected_video_size(
                         info, target_height, target_codec, clip_duration=clip_duration, is_muted=is_muted
                     )
@@ -399,8 +414,18 @@ class JobProcessor:
                         clip_duration = float((job.clip_end or 0) - (job.clip_start or 0))
 
                     loop = asyncio.get_running_loop()
+                    cancel_event = threading.Event()
+
+                    async def _cancel_watcher():
+                        while not cancel_event.is_set():
+                            if await QueueService.is_cancelled(job_id):
+                                cancel_event.set()
+                                break
+                            await asyncio.sleep(0.5)
 
                     def progress_hook(d):
+                        if cancel_event.is_set():
+                            raise yt_dlp.utils.DownloadCancelled("Job cancelled by user")
                         try:
                             if d.get("status") == "downloading":
                                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -414,6 +439,8 @@ class JobProcessor:
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
                                 notifier.on_download_progress(pct, speed=speed, eta=eta)
+                        except yt_dlp.utils.DownloadCancelled:
+                            raise
                         except Exception as pe:
                             logger.debug("Progress hook update error: %s", pe)
 
@@ -422,7 +449,24 @@ class JobProcessor:
                     def _dl():
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             ydl.download([job.canonical_url])
-                    await loop.run_in_executor(None, _dl)
+
+                    watcher_task = asyncio.create_task(_cancel_watcher())
+                    try:
+                        await loop.run_in_executor(None, _dl)
+                    except (yt_dlp.utils.DownloadCancelled, Exception) as dl_err:
+                        if cancel_event.is_set() or isinstance(dl_err, yt_dlp.utils.DownloadCancelled):
+                            logger.info("Video download aborted due to cancellation for job %s", job_id)
+                            await notifier.stop_ticker()
+                            job.status = JobStatus.CANCELLED.value
+                            await session.commit()
+                            await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                            await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                            if own_bot and bot is not None:
+                                await bot.session.close()
+                            return
+                        raise
+                    finally:
+                        watcher_task.cancel()
 
                     notifier.set_stage("process")
 
@@ -430,6 +474,10 @@ class JobProcessor:
                         await notifier.stop_ticker()
                         job.status = JobStatus.CANCELLED.value
                         await session.commit()
+                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                        if own_bot and bot is not None:
+                            await bot.session.close()
                         return
 
                     video_exts = {".mp4", ".webm", ".mkv", ".mov", ".avi", ".ts", ".m4v"}
@@ -683,6 +731,20 @@ class JobProcessor:
                     except Exception as meta_err:
                         logger.warning("Could not extract rich metadata for audio job %s: %s", job_id, meta_err)
 
+                    if meta_info.get("is_live") or meta_info.get("live_status") == "is_live":
+                        logger.warning("Audio job %s rejected: stream is live", job_id)
+                        await notifier.stop_ticker()
+                        job.status = JobStatus.FAILED.value
+                        job.error_code = "LIVESTREAM_NOT_SUPPORTED"
+                        job.error_message = "Livestreams are not supported."
+                        await session.commit()
+                        await notifier.update("❌", "Failed", "Livestreams are not supported.", force=True)
+                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                        if own_bot and bot is not None:
+                            await bot.session.close()
+                        return
+
                     audio_title, audio_artist, audio_album, audio_year, audio_duration = FFmpegService.resolve_audio_metadata(
                         info_dict=meta_info, fallback_title=job.title
                     )
@@ -706,8 +768,18 @@ class JobProcessor:
                         )
 
                     loop = asyncio.get_running_loop()
+                    cancel_event_audio = threading.Event()
+
+                    async def _cancel_watcher_audio():
+                        while not cancel_event_audio.is_set():
+                            if await QueueService.is_cancelled(job_id):
+                                cancel_event_audio.set()
+                                break
+                            await asyncio.sleep(0.5)
 
                     def progress_hook_audio(d):
+                        if cancel_event_audio.is_set():
+                            raise yt_dlp.utils.DownloadCancelled("Job cancelled by user")
                         try:
                             if d.get("status") == "downloading":
                                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -721,6 +793,8 @@ class JobProcessor:
                                 speed = d.get("_speed_str", "")
                                 eta = d.get("_eta_str", "")
                                 notifier.on_download_progress(pct, speed=speed, eta=eta)
+                        except yt_dlp.utils.DownloadCancelled:
+                            raise
                         except Exception as pe:
                             logger.debug("Audio progress hook error: %s", pe)
 
@@ -729,7 +803,24 @@ class JobProcessor:
                     def _dl_audio():
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             ydl.download([job.canonical_url])
-                    await loop.run_in_executor(None, _dl_audio)
+
+                    watcher_task_audio = asyncio.create_task(_cancel_watcher_audio())
+                    try:
+                        await loop.run_in_executor(None, _dl_audio)
+                    except (yt_dlp.utils.DownloadCancelled, Exception) as dl_err:
+                        if cancel_event_audio.is_set() or isinstance(dl_err, yt_dlp.utils.DownloadCancelled):
+                            logger.info("Audio download aborted due to cancellation for job %s", job_id)
+                            await notifier.stop_ticker()
+                            job.status = JobStatus.CANCELLED.value
+                            await session.commit()
+                            await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                            await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                            if own_bot and bot is not None:
+                                await bot.session.close()
+                            return
+                        raise
+                    finally:
+                        watcher_task_audio.cancel()
 
                     notifier.set_stage("process", label="🎵 Processing audio...")
 

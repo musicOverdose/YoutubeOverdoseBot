@@ -287,6 +287,18 @@ class YtDlpService:
             "ignoreerrors": False,
             "noplaylist": not settings.PLAYLISTS_ENABLED,
             "socket_timeout": 30,
+            "concurrent_fragments": 16,
+            "buffersize": 4194304,
+            "trim_file_name": 220,
+            "retries": 10,
+            "fragment_retries": 10,
+            "skip_unavailable_fragments": True,
+            "retry_sleep_functions": {
+                "http": lambda n: 3,
+                "fragment": lambda n: 3,
+                "file_access": lambda n: 3,
+                "extractor": lambda n: 3,
+            },
         }
 
         active_cookie_file = cookies_file or settings.YTDLP_COOKIES_FILE
@@ -295,6 +307,13 @@ class YtDlpService:
 
         if settings.YTDLP_PROXY:
             opts["proxy"] = settings.YTDLP_PROXY
+
+        if getattr(settings, "YTDLP_PO_TOKEN", None):
+            po = str(settings.YTDLP_PO_TOKEN).strip()
+            if po:
+                opts["extractor_args"] = {
+                    "youtube": ["player-client=web,default", f"po_token=web+{po}"]
+                }
 
         return opts
 

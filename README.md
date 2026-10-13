@@ -32,9 +32,16 @@ Unlike conventional downloaders that eat gigabytes of VPS storage, **Youtube Ove
 - ✂️ **Advanced Options & Video/Audio Clipping**:
   - Interactive range cutter: cut any custom timestamp segment (e.g., `1:23 - 3:30`, `start - max`, `1:00 - max`).
   - Zero re-encoding overhead: losslessly cuts clips using stream-copy (`-c copy`) and native `yt-dlp` download sections.
+  - Zero thumbnail injection: clips contain strictly the exact cut video frames with zero extra intro frames or attached pictures.
   - Optional Muted video mode (`[ 🔇 Mute Audio: ON/OFF ]`) and MP3 clip extraction.
   - Configurable maximum clip duration via Web Admin (default: 15 minutes).
   - Clean chat automation: automatically deletes timestamp prompts and user replies.
+- 🚀 **High-Throughput yt-dlp Acceleration & In-Flight Cancellation**:
+  - Concurrent fragment downloading (`concurrent_fragments=16`, `buffersize=4MB`) delivers multi-fold download speedups on fast VPS networks.
+  - Instant cancellation: background task monitor triggers immediate abort within yt-dlp progress hooks when a user cancels, freeing bandwidth and disk I/O.
+  - Filesystem name length protection (`trim_file_name=220`) to eliminate `ENAMETOOLONG` Linux crashes on long Unicode/Persian titles.
+  - Automatic livestream rejection: early detection prevents hanging or infinite stream downloads.
+  - Proof-of-Origin (PO-token) and Netscape cookie support for datacenter IP anti-bot bypass.
 - ⚡ **Smart Automatic Codec Selection & Stream-Copy Engine**:
   - Automatically identifies whether streams can be losslessly copied (`-c copy`) without CPU transcoding.
   - Automatically selects optimal Telegram-compatible codecs (AVC / H.264 or HEVC / H.265).
