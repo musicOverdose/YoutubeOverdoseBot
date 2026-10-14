@@ -261,16 +261,3 @@ def build_queue_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def build_extraction_keyboard(request_id: str) -> InlineKeyboardMarkup:
-    """
-    Cancel button for initial metadata extraction:
-    [❌ Cancel Request]
-    """
-    keyboard = [
-        [
-            InlineKeyboardButton(text="❌ Cancel Request", callback_data=f"ext_cancel:{request_id}"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)

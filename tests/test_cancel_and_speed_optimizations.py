@@ -11,10 +11,9 @@ from src.services.queue_service import QueueService
 from src.services.ytdlp_service import YtDlpService
 from src.worker.notifier import StatusNotifier
 from src.bot.keyboards import (
-    build_extraction_keyboard,
     build_queue_status_keyboard,
 )
-from src.bot.handlers.url_handler import on_cancel_extraction, process_youtube_url
+from src.bot.handlers.url_handler import process_youtube_url
 from src.bot.handlers.queue_handler import on_cancel_job
 
 
@@ -104,30 +103,25 @@ async def test_cache_hits_avoid_repeated_extraction():
 
 
 # ==============================================================================
-# 2. EXTRACTION CANCELLATION LIFECYCLE TESTS
+# 2. EXTRACTION UX TESTS
 # ==============================================================================
 
 @pytest.mark.asyncio
-async def test_extraction_cancellation_prevents_subsequent_job_or_menu():
-    """Verifies that an abandoned extraction does NOT send a quality menu or enqueue anything."""
+async def test_extracting_message_does_not_attach_cancel_button():
+    """Verifies that the initial extracting message is sent without reply markup (no cancel button)."""
     bot_mock = AsyncMock()
     status_msg = AsyncMock()
     bot_mock.send_message.return_value = status_msg
     
     simulated_info = {
         "id": "dQw4w9WgXcQ",
-        "title": "Never Displayed",
+        "title": "Fast Video",
         "duration": 120,
         "formats": [{"format_id": "18", "height": 360}],
     }
     
     with patch("src.services.ytdlp_service.YtDlpService.extract_metadata", new=AsyncMock(return_value=simulated_info)), \
-         patch("src.bot.handlers.url_handler.get_redis_client") as mock_redis_func, \
          patch("src.services.thumbnail_service.ThumbnailService.prepare_preview_photo", new=AsyncMock(return_value=False)):
-        
-        mock_r = AsyncMock()
-        mock_r.get.return_value = json.dumps({"status": "cancelled", "user_id": 111, "chat_id": 222})
-        mock_redis_func.return_value = mock_r
         
         await process_youtube_url(
             bot=bot_mock,
@@ -137,50 +131,10 @@ async def test_extraction_cancellation_prevents_subsequent_job_or_menu():
             user_id=111,
         )
         
-        assert bot_mock.send_photo.call_count == 0
-        assert bot_mock.send_message.call_count == 1  # only the initial extracting message
-
-
-@pytest.mark.asyncio
-async def test_extraction_cancel_callback_marks_abandoned():
-    """Verifies that on_cancel_extraction marks the Redis request abandoned and edits status."""
-    callback = MagicMock()
-    callback.data = "ext_cancel:req123"
-    callback.from_user.id = 111
-    callback.message = AsyncMock()
-    callback.answer = AsyncMock()
-    
-    with patch("src.bot.handlers.url_handler.get_redis_client") as mock_redis_func:
-        mock_r = AsyncMock()
-        mock_r.get.return_value = json.dumps({"user_id": 111, "chat_id": 222, "status": "active"})
-        mock_redis_func.return_value = mock_r
-        
-        await on_cancel_extraction(callback, AsyncMock())
-        
-        set_args = mock_r.set.call_args[0]
-        assert "cancelled" in set_args[1]
-        assert callback.message.edit_text.called
-        assert "cancelled" in callback.message.edit_text.call_args[0][0].lower()
-
-
-@pytest.mark.asyncio
-async def test_extraction_cancel_rejects_unauthorized_user():
-    """Verifies that an unauthorized user cannot cancel another user's extraction."""
-    callback = MagicMock()
-    callback.data = "ext_cancel:req123"
-    callback.from_user.id = 999  # Attacker
-    callback.message = AsyncMock()
-    callback.answer = AsyncMock()
-    
-    with patch("src.bot.handlers.url_handler.get_redis_client") as mock_redis_func:
-        mock_r = AsyncMock()
-        mock_r.get.return_value = json.dumps({"user_id": 111, "chat_id": 222, "status": "active"})
-        mock_redis_func.return_value = mock_r
-        
-        await on_cancel_extraction(callback, AsyncMock())
-        
-        callback.answer.assert_awaited_once_with("You cannot cancel someone else's request.", show_alert=True)
-        assert not callback.message.edit_text.called
+        assert bot_mock.send_message.call_count >= 1
+        first_call = bot_mock.send_message.call_args_list[0]
+        assert "Extracting video information" in first_call.kwargs.get("text", "")
+        assert first_call.kwargs.get("reply_markup") is None
 
 
 # ==============================================================================
