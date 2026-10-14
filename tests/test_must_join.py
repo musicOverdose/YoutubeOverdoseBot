@@ -5,6 +5,13 @@ from src.models.channel import RequiredChannel
 from src.services.must_join_service import MustJoinService, is_active_member
 
 
+@pytest.fixture(autouse=True)
+def reset_channels_cache():
+    MustJoinService.clear_local_channels_cache()
+    yield
+    MustJoinService.clear_local_channels_cache()
+
+
 def test_membership_state_evaluation():
     # 1. Active states
     m_creator = MagicMock(status="creator")
@@ -384,5 +391,403 @@ async def test_must_join_handler_check_again_flow(db_session, monkeypatch):
     # Verifies pending action was resumed
     assert mock_process.called
     assert mock_process.call_args[0][2] == "https://www.youtube.com/watch?v=12345678901"
+
+
+@pytest.mark.asyncio
+async def test_chat_member_join_and_leave_event_handling(db_session, monkeypatch):
+    """
+    Verifies that:
+    - User join event updates Redis to MEMBER with 24h TTL.
+    - User leave event updates Redis to NOT_MEMBER with 30s TTL without deleting.
+    """
+    from datetime import datetime, timezone
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_KNOWN_USERS, REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    user_id = 778899
+    # User is known to bot
+    await mock_r.sadd(REDIS_KEY_KNOWN_USERS, str(user_id))
+
+    bot = MagicMock()
+    # 1. Join Event
+    mock_event_join = MagicMock()
+    mock_event_join.chat.id = -1001
+    mock_event_join.new_chat_member.user.id = user_id
+    mock_event_join.new_chat_member.user.is_bot = False
+    mock_event_join.new_chat_member.status = "member"
+    mock_event_join.old_chat_member.status = "left"
+    mock_event_join.date = datetime.now(timezone.utc)
+
+    await MustJoinService.handle_chat_member_event(bot, mock_event_join, update_id=101, session=db_session)
+
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{user_id}"
+    record_raw = await mock_r.get(key)
+    assert record_raw is not None
+    assert '"status": "MEMBER"' in record_raw
+    assert await mock_r.ttl(key) == 86400
+
+    # 2. Leave Event
+    mock_event_leave = MagicMock()
+    mock_event_leave.chat.id = -1001
+    mock_event_leave.new_chat_member.user.id = user_id
+    mock_event_leave.new_chat_member.user.is_bot = False
+    mock_event_leave.new_chat_member.status = "left"
+    mock_event_leave.old_chat_member.status = "member"
+    mock_event_leave.date = datetime.now(timezone.utc)
+
+    await MustJoinService.handle_chat_member_event(bot, mock_event_leave, update_id=102, session=db_session)
+
+    record_raw2 = await mock_r.get(key)
+    assert record_raw2 is not None
+    assert '"status": "NOT_MEMBER"' in record_raw2
+    assert await mock_r.ttl(key) == 30
+
+
+@pytest.mark.asyncio
+async def test_chat_member_restricted_is_member_flag(db_session, monkeypatch):
+    """
+    Verifies that restricted status respects the is_member flag:
+    - is_member=True -> MEMBER
+    - is_member=False -> NOT_MEMBER
+    """
+    from datetime import datetime, timezone
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_KNOWN_USERS, REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    user_id = 445566
+    await mock_r.sadd(REDIS_KEY_KNOWN_USERS, str(user_id))
+
+    bot = MagicMock()
+    # 1. Restricted but still a member
+    event1 = MagicMock()
+    event1.chat.id = -1001
+    event1.new_chat_member.user.id = user_id
+    event1.new_chat_member.user.is_bot = False
+    event1.new_chat_member.status = "restricted"
+    event1.new_chat_member.is_member = True
+    event1.old_chat_member.status = "left"
+    event1.date = datetime.now(timezone.utc)
+
+    await MustJoinService.handle_chat_member_event(bot, event1, update_id=201, session=db_session)
+
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{user_id}"
+    rec1 = await mock_r.get(key)
+    assert '"status": "MEMBER"' in rec1
+
+    # 2. Restricted with is_member=False (effectively removed)
+    event2 = MagicMock()
+    event2.chat.id = -1001
+    event2.new_chat_member.user.id = user_id
+    event2.new_chat_member.user.is_bot = False
+    event2.new_chat_member.status = "restricted"
+    event2.new_chat_member.is_member = False
+    event2.old_chat_member.status = "restricted"
+    event2.old_chat_member.is_member = True
+    event2.date = datetime.now(timezone.utc)
+
+    await MustJoinService.handle_chat_member_event(bot, event2, update_id=202, session=db_session)
+
+    rec2 = await mock_r.get(key)
+    assert '"status": "NOT_MEMBER"' in rec2
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_membership_events_discarded(monkeypatch):
+    """
+    Verifies that an older event cannot overwrite a newer state in Redis:
+    - By update_id
+    - By timestamp fallback
+    """
+    from tests.mock_redis import MockRedis
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    channel_id = -1001
+    user_id = 999111
+
+    # Save newer event (update_id=500, ts=1000)
+    saved = await MustJoinService.save_membership_record(
+        channel_id=channel_id,
+        user_id=user_id,
+        status="MEMBER",
+        update_id=500,
+        ts=1000.0,
+        source="event",
+    )
+    assert saved is True
+
+    # Attempt to save older event by update_id (update_id=450, ts=1100) -> must be rejected
+    rejected_uid = await MustJoinService.save_membership_record(
+        channel_id=channel_id,
+        user_id=user_id,
+        status="NOT_MEMBER",
+        update_id=450,
+        ts=1100.0,
+        source="event",
+    )
+    assert rejected_uid is False
+
+    # Attempt to save older event by timestamp when update_id missing (ts=900) -> must be rejected
+    rejected_ts = await MustJoinService.save_membership_record(
+        channel_id=channel_id,
+        user_id=user_id,
+        status="NOT_MEMBER",
+        update_id=None,
+        ts=900.0,
+        source="event",
+    )
+    assert rejected_ts is False
+
+    # Current state in Redis remains MEMBER
+    key = f"ytdl:membership:cache:{channel_id}:{user_id}"
+    rec = await mock_r.get(key)
+    assert '"status": "MEMBER"' in rec
+
+
+@pytest.mark.asyncio
+async def test_unknown_user_join_event_not_cached(db_session, monkeypatch):
+    """
+    Verifies that join events for users not known to the bot (not in known_users, no prior cache)
+    are discarded to prevent database/Redis subscriber write amplification.
+    """
+    from datetime import datetime, timezone
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    unknown_user_id = 888777666
+    bot = MagicMock()
+
+    event = MagicMock()
+    event.chat.id = -1001
+    event.new_chat_member.user.id = unknown_user_id
+    event.new_chat_member.user.is_bot = False
+    event.new_chat_member.status = "member"
+    event.old_chat_member.status = "left"
+    event.date = datetime.now(timezone.utc)
+
+    await MustJoinService.handle_chat_member_event(bot, event, update_id=601, session=db_session)
+
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{unknown_user_id}"
+    # Key must NOT exist in Redis
+    assert await mock_r.get(key) is None
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_extend_positive_ttl(db_session, monkeypatch):
+    """
+    Verifies that cache hits allow access without calling Telegram API,
+    and DO NOT extend or refresh the positive record's fixed 24h TTL.
+    """
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    user_id = 333222
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{user_id}"
+
+    # Manually store record with TTL
+    await MustJoinService.save_membership_record(
+        channel_id=-1001,
+        user_id=user_id,
+        status="MEMBER",
+        update_id=1,
+        source="event",
+    )
+    initial_ttl = await mock_r.ttl(key)
+    assert initial_ttl == 86400
+
+    # Simulate TTL ticking down to 50000
+    mock_r.ttls[key] = 50000
+
+    bot = MagicMock()
+    bot.get_chat_member = AsyncMock()
+
+    # Perform Must-Join check with force_authoritative=False
+    is_auth, missing = await MustJoinService.require_must_join(
+        bot, db_session, user_id=user_id, force_authoritative=False
+    )
+    assert is_auth is True
+    assert missing == []
+    # Zero Telegram API calls!
+    assert not bot.get_chat_member.called
+    # TTL MUST NOT BE REFRESHED BACK TO 86400!
+    assert await mock_r.ttl(key) == 50000
+
+
+@pytest.mark.asyncio
+async def test_telegram_api_error_not_cached_as_not_member_and_warns_user(db_session, monkeypatch):
+    """
+    Verifies that TelegramAPIError (e.g. 502/network failure):
+    - Is NOT saved into Redis as NOT_MEMBER.
+    - Prompts user with retryable temporary unavailable notice, NOT 'you left the channel'.
+    """
+    from aiogram.exceptions import TelegramAPIError
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    user_id = 112244
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{user_id}"
+
+    bot = MagicMock()
+    bot.get_chat_member = AsyncMock(side_effect=TelegramAPIError(method=MagicMock(), message="502 Bad Gateway"))
+
+    mock_msg = MagicMock()
+    mock_msg.from_user = MagicMock(id=user_id, first_name="User", username="user")
+    mock_msg.chat = MagicMock(id=user_id)
+    mock_msg.answer = AsyncMock()
+
+    allowed = await MustJoinService.enforce_must_join_message(mock_msg, bot, db_session)
+    assert allowed is False
+
+    # Verify Redis does NOT contain a NOT_MEMBER record
+    assert await mock_r.get(key) is None
+
+    # Verify message sent to user explains temporary outage, not missing channels
+    assert mock_msg.answer.called
+    sent_text = mock_msg.answer.call_args[0][0]
+    assert "Temporarily Unavailable" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_my_chat_member_bot_permission_loss(db_session):
+    """
+    Verifies that when my_chat_member reports the bot lost administrator status:
+    - RequiredChannel.bot_status is set to 'error'
+    - last_error records the permission loss
+    """
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    bot = MagicMock()
+    event = MagicMock()
+    event.chat.id = -1001
+    event.new_chat_member.status = "member"  # Demoted to regular member!
+
+    await MustJoinService.handle_my_chat_member_event(bot, event, session=db_session)
+
+    # Re-fetch channel from DB
+    await db_session.refresh(ch)
+    assert ch.bot_status == "error"
+    assert "lost administrator rights" in ch.last_error
+
+
+@pytest.mark.asyncio
+async def test_worker_delivery_uses_event_updated_cache(db_session, monkeypatch):
+    """
+    Verifies that background worker delivery uses the event-updated Redis cache
+    instead of issuing a blocking Telegram API request on every finished job.
+    """
+    from tests.mock_redis import MockRedis
+    from src.core.constants import REDIS_KEY_MEMBERSHIP_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", enabled=True, bot_status="administrator")
+    db_session.add(ch)
+    await db_session.commit()
+
+    user_id = 998811
+    key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}-1001:{user_id}"
+
+    # Store MEMBER in Redis
+    await MustJoinService.save_membership_record(
+        channel_id=-1001,
+        user_id=user_id,
+        status="MEMBER",
+        source="event",
+    )
+
+    bot = MagicMock()
+    bot.get_chat_member = AsyncMock()
+
+    # Worker check with force_authoritative=False
+    is_auth, missing = await MustJoinService.require_must_join(
+        bot, db_session, user_id=user_id, force_authoritative=False
+    )
+    assert is_auth is True
+    assert missing == []
+    # Confirms worker avoided Telegram API round-trip
+    assert not bot.get_chat_member.called
+
+    # If user leaves and cache becomes NOT_MEMBER
+    await MustJoinService.save_membership_record(
+        channel_id=-1001,
+        user_id=user_id,
+        status="NOT_MEMBER",
+        source="event",
+    )
+    is_auth2, missing2 = await MustJoinService.require_must_join(
+        bot, db_session, user_id=user_id, force_authoritative=False
+    )
+    assert is_auth2 is False
+    assert len(missing2) == 1
+    assert not bot.get_chat_member.called
+
+
+@pytest.mark.asyncio
+async def test_channel_cache_invalidation_broadcast(monkeypatch):
+    """
+    Verifies that MustJoinService.invalidate_channels_cache clears the local cache
+    and publishes the reload notification to Redis.
+    """
+    from tests.mock_redis import MockRedis
+
+    mock_r = MockRedis()
+    published_events = []
+
+    async def mock_publish(channel, msg):
+        published_events.append((channel, msg))
+        return 1
+
+    mock_r.publish = mock_publish
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    # Set up some dummy cache
+    MustJoinService._channels_cache = [MagicMock()]
+    MustJoinService._channels_cache_ts = 12345.0
+
+    await MustJoinService.invalidate_channels_cache()
+
+    assert MustJoinService._channels_cache is None
+    assert MustJoinService._channels_cache_ts == 0.0
+    assert ("must_join:channels:reload", "1") in published_events
+
 
 

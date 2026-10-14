@@ -9,8 +9,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.core.constants import REDIS_KEY_KNOWN_USERS
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 from src.models.user import User
 from src.services.must_join_service import MustJoinService
 from src.services.setting_service import DEFAULT_ABOUT_MESSAGE, DEFAULT_HELP_MESSAGE, DEFAULT_WELCOME_MESSAGE, SettingService
@@ -20,7 +22,13 @@ base_router = Router()
 
 
 async def _persist_user_background(msg_user) -> None:
-    """Persists or updates user record in PostgreSQL asynchronously without delaying user response."""
+    """Persists or updates user record in PostgreSQL and registers in Redis known_users set."""
+    try:
+        r = get_redis_client()
+        await r.sadd(REDIS_KEY_KNOWN_USERS, str(msg_user.id))
+    except Exception as e:
+        logger.debug("Redis known_users registration failed: %s", e)
+
     try:
         async with AsyncSessionLocal() as session:
             await get_or_create_user(session, msg_user)

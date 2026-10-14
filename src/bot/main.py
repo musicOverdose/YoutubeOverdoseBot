@@ -24,6 +24,7 @@ from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
 from src.core.redis import get_redis_client
 from src.models.setting import Setting
+from src.services.must_join_service import MustJoinService
 from src.services.setting_service import SettingService
 
 logger = setup_logger("bot_main")
@@ -146,13 +147,16 @@ async def main() -> None:
             try:
                 r = get_redis_client()
                 pubsub = r.pubsub()
-                await pubsub.subscribe("telegram:config:reload", "app:config:reload")
+                await pubsub.subscribe("telegram:config:reload", "app:config:reload", "must_join:channels:reload")
                 async for message in pubsub.listen():
                     if message and message.get("type") == "message":
                         channel = message.get("channel")
                         if isinstance(channel, bytes):
                             channel = channel.decode("utf-8")
-                        if channel == "app:config:reload":
+                        if channel == "must_join:channels:reload":
+                            logger.info("Must-join channels reload event received. Clearing local channels cache...")
+                            MustJoinService.clear_local_channels_cache()
+                        elif channel == "app:config:reload":
                             logger.info("Application settings reload event received. Updating runtime...")
                             try:
                                 await SettingService.load_public_settings_to_runtime()
@@ -263,7 +267,10 @@ async def main() -> None:
 
             polling_start_time = asyncio.get_running_loop().time()
             polling_task = asyncio.create_task(
-                dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+                dp.start_polling(
+                    bot,
+                    allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"],
+                )
             )
 
             waiter = asyncio.create_task(reload_event.wait())

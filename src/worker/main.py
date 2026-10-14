@@ -47,20 +47,28 @@ async def worker_loop():
     # Listen for runtime config reloads via Redis
     async def listen_for_setting_reloads():
         from src.core.redis import get_redis_client
+        from src.services.must_join_service import MustJoinService
         while running:
             try:
                 r = get_redis_client()
                 pubsub = r.pubsub()
-                await pubsub.subscribe("app:config:reload")
+                await pubsub.subscribe("app:config:reload", "must_join:channels:reload")
                 async for message in pubsub.listen():
                     if not running:
                         break
                     if message and message.get("type") == "message":
-                        try:
-                            await SettingService.load_public_settings_to_runtime()
-                            logger.info("Worker reloaded public application settings from PostgreSQL.")
-                        except Exception as e:
-                            logger.warning("Worker failed to reload application settings: %s", e)
+                        channel = message.get("channel")
+                        if isinstance(channel, bytes):
+                            channel = channel.decode("utf-8")
+                        if channel == "must_join:channels:reload":
+                            logger.info("Worker received must-join channels reload signal. Clearing channels cache...")
+                            MustJoinService.clear_local_channels_cache()
+                        elif channel == "app:config:reload":
+                            try:
+                                await SettingService.load_public_settings_to_runtime()
+                                logger.info("Worker reloaded public application settings from PostgreSQL.")
+                            except Exception as e:
+                                logger.warning("Worker failed to reload application settings: %s", e)
             except asyncio.CancelledError:
                 break
             except Exception as e:

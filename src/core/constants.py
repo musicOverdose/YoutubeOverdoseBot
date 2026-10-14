@@ -84,13 +84,14 @@ REDIS_KEY_PROGRESS_PREFIX = "ytdl:progress:"
 REDIS_KEY_CACHE_LOCK_PREFIX = "ytdl:lock:cache:"
 REDIS_KEY_QUEUE_PAUSED = "ytdl:queue_paused"
 REDIS_KEY_MEMBERSHIP_PREFIX = "ytdl:membership:cache:"
+REDIS_KEY_KNOWN_USERS = "ytdl:known_users"
 REDIS_KEY_CANCEL_PREFIX = "ytdl:cancel:"
 REDIS_KEY_METADATA_PREFIX = "ytdl:metadata:cache:"
 REDIS_KEY_SUBTITLE_CACHE_PREFIX = "ytdl:subs:en:"
 REDIS_KEY_SUBTITLE_FA_CACHE_PREFIX = "ytdl:subs:fa:"
 
 # Default Timeouts and Settings
-MEMBERSHIP_CACHE_TTL = 1800             # 30 minutes (backward compatible default)
-MEMBERSHIP_CACHE_TTL_MEMBER = 1800      # 30 minutes for confirmed channel members
-MEMBERSHIP_CACHE_TTL_NON_MEMBER = 15    # 15 seconds for unverified users
+MEMBERSHIP_CACHE_TTL = 86400            # 24 hours (backward compatible default)
+MEMBERSHIP_CACHE_TTL_MEMBER = 86400     # 24 hours fixed TTL for confirmed channel members
+MEMBERSHIP_CACHE_TTL_NON_MEMBER = 30    # 30 seconds for unverified users
 CACHE_LOCK_TTL = 3600                   # 1 hour duplicate lock

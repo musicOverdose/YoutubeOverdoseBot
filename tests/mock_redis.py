@@ -72,6 +72,21 @@ class MockRedis:
         async with self.lock:
             return set(self.sets.get(key, set()))
 
+    async def sismember(self, key: str, member: str) -> bool:
+        async with self.lock:
+            return str(member) in self.sets.get(key, set())
+
+    async def exists(self, *keys: str) -> int:
+        async with self.lock:
+            return sum(
+                1
+                for k in keys
+                if k in self.strings or k in self.lists or k in self.sets
+            )
+
+    async def publish(self, channel: str, message: str) -> int:
+        return 1
+
     async def get(self, key: str) -> Optional[str]:
         async with self.lock:
             return self.strings.get(key)

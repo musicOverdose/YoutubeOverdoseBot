@@ -80,6 +80,7 @@ async def toggle_must_join(
     await SettingService.save_single_setting(
         SETTING_MUST_JOIN_ENABLED, req.enabled, description="Must Join System Enabled", session=session
     )
+    await MustJoinService.invalidate_channels_cache()
     await AuditService.log_action(
         session, "SETTING_UPDATE", admin["sub"], f"Must Join system toggled to {req.enabled}"
     )
@@ -177,6 +178,8 @@ async def add_channel(
     await session.commit()
     await session.refresh(ch)
 
+    await MustJoinService.invalidate_channels_cache()
+
     await AuditService.log_action(
         session, "CHANNEL_ADD", admin["sub"], f"Added required channel {title} ({numeric_chat_id})"
     )
@@ -209,6 +212,8 @@ async def update_channel(
     ch.enabled = req.enabled
     await session.commit()
 
+    await MustJoinService.invalidate_channels_cache()
+
     await AuditService.log_action(
         session, "CHANNEL_UPDATE", admin["sub"], f"Updated required channel {ch.id}"
     )
@@ -229,6 +234,9 @@ async def delete_channel(
 
     await session.delete(ch)
     await session.commit()
+
+    await MustJoinService.invalidate_channels_cache()
+
     await AuditService.log_action(
         session, "CHANNEL_REMOVE", admin["sub"], f"Removed required channel {channel_id}"
     )

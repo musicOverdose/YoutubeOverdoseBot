@@ -1179,7 +1179,7 @@ class JobProcessor:
 
                 for req in current_requests:
                     is_auth, missing_channels = await MustJoinService.require_must_join(
-                        bot, session, req.user_id, force_authoritative=True
+                        bot, session, req.user_id, force_authoritative=False
                     )
 
                     if not is_auth:

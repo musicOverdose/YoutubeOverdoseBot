@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 import html
+from typing import Optional
 from aiogram import Bot, Router
 from aiogram.enums import ParseMode
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, ChatMemberUpdated, Update
 from sqlalchemy import select, update
 from src.bot.keyboards import build_must_join_keyboard
 from src.core.constants import DeliveryStatus
@@ -16,6 +17,26 @@ from src.services.must_join_service import MustJoinService
 
 logger = setup_logger("must_join_handler")
 must_join_router = Router()
+
+
+@must_join_router.chat_member()
+async def on_channel_chat_member_updated(
+    event: ChatMemberUpdated,
+    bot: Bot,
+    event_update: Optional[Update] = None,
+):
+    """Event-driven listener for user join/leave/kick updates in required channels."""
+    update_id = getattr(event_update, "update_id", None)
+    await MustJoinService.handle_chat_member_event(bot, event, update_id=update_id)
+
+
+@must_join_router.my_chat_member()
+async def on_bot_chat_member_updated(
+    event: ChatMemberUpdated,
+    bot: Bot,
+):
+    """Event-driven listener for bot's own administrative permission changes in required channels."""
+    await MustJoinService.handle_my_chat_member_event(bot, event)
 
 
 @must_join_router.callback_query(lambda c: c.data in ("must_join:no_url", "none"))
