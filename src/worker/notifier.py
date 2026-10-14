@@ -3,7 +3,9 @@ import html
 import time
 from typing import Dict, List, Optional
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 
 logger = setup_logger("worker_notifier")
 
@@ -23,9 +25,10 @@ def render_progress_bar(pct: float, width: int = 16) -> str:
 class StatusNotifier:
     render_progress_bar = staticmethod(render_progress_bar)
 
-    def __init__(self, bot: Bot, requests: List[dict]):
+    def __init__(self, bot: Bot, requests: List[dict], job_id: Optional[str] = None):
         self.bot = bot
         self.requests = requests  # list of {"chat_id": int, "message_id": int}
+        self.job_id = job_id
         self.last_update_time: float = 0.0
         self.min_update_interval: float = 1.2  # Seconds between Telegram message edits
         self.last_text: str = ""
@@ -35,6 +38,28 @@ class StatusNotifier:
         self.current_eta: str = ""
         self.current_stage: str = "download"  # "download", "process", "upload"
         self.process_label: str = "⚙️ Processing media..."
+        self._ticker_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    async def is_ui_dismissed(job_id: str, chat_id: int) -> bool:
+        """Checks if a subscriber has dismissed status progress updates for this job."""
+        try:
+            r = get_redis_client()
+            return bool(await r.sismember(f"ytdl:ui_dismissed:{job_id}", str(chat_id)))
+        except Exception:
+            return False
+
+    @staticmethod
+    async def mark_ui_dismissed(job_id: str, chat_id: int) -> None:
+        """Marks that a subscriber has dismissed status progress updates for this job."""
+        try:
+            r = get_redis_client()
+            key = f"ytdl:ui_dismissed:{job_id}"
+            await r.sadd(key, str(chat_id))
+            await r.expire(key, 86400)
+        except Exception:
+            pass
         self._ticker_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
 
@@ -244,17 +269,38 @@ class StatusNotifier:
         self.last_update_time = now
         self.last_text = text
 
+        markup: Optional[InlineKeyboardMarkup] = None
+        if self.job_id and stage_icon not in ("❌", "✅") and stage_name not in ("Failed", "Completed", "Done"):
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✖️ Dismiss Status",
+                            callback_data=f"q_dismiss:{self.job_id}",
+                        )
+                    ]
+                ]
+            )
+
         for req in self.requests:
             chat_id = req.get("chat_id")
             message_id = req.get("message_id")
             if not chat_id or not message_id:
                 continue
 
+            if self.job_id:
+                try:
+                    if await self.is_ui_dismissed(self.job_id, chat_id):
+                        continue
+                except Exception:
+                    pass
+
             try:
                 await self.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text=text,
+                    reply_markup=markup,
                     parse_mode="HTML",
                 )
             except Exception:

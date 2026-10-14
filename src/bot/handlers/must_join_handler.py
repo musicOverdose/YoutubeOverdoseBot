@@ -113,7 +113,7 @@ async def on_must_join_check_again(callback: CallbackQuery, bot: Bot):
                             f"🔗 Resuming your request for:\n<b>{html.escape(url)}</b>",
                             parse_mode=ParseMode.HTML,
                         )
-                    await process_youtube_url(bot, chat_id, url, source_id)
+                    await process_youtube_url(bot, chat_id, url, source_id, user_id=user_id)
                     return
 
         if callback.message:

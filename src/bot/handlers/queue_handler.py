@@ -62,13 +62,16 @@ async def on_queue_status(callback: CallbackQuery, bot: Bot):
             await callback.answer()
 
 
+from src.worker.notifier import StatusNotifier
+
+
 @queue_router.callback_query(lambda c: c.data and c.data.startswith("q_cancel:"))
 async def on_cancel_job(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
     job_id = callback.data.split(":")[1]
 
     async with AsyncSessionLocal() as session:
-        # Find user's specific request
+        # 1. Validate job ownership and chat context
         stmt = select(JobRequest).where(
             JobRequest.job_id == job_id, JobRequest.user_id == user_id
         )
@@ -76,44 +79,139 @@ async def on_cancel_job(callback: CallbackQuery, bot: Bot):
         user_req = res.scalar_one_or_none()
 
         if not user_req:
-            await callback.answer("You are not subscribed to this job.", show_alert=True)
+            await callback.answer("You are not authorized or not subscribed to this job.", show_alert=True)
             return
 
-        # Delete only this user's subscription
+        job_stmt = select(Job).where(Job.id == job_id)
+        job_res = await session.execute(job_stmt)
+        job = job_res.scalar_one_or_none()
+
+        if not job or job.status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
+            await callback.answer("This job has already finished or was cancelled.", show_alert=True)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+
+        # 2. Check if the job is still queued vs already active
+        # Handle races between cancellation and job acquisition
+        if job.status != JobStatus.QUEUED.value:
+            # The job has already transitioned to active (e.g. PREPARING, DOWNLOADING, PROCESSING)
+            # Do NOT terminate running active jobs. Treat as UI dismissal per design.
+            await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
+            try:
+                await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+            except Exception:
+                try:
+                    await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+                except Exception:
+                    pass
+            await callback.answer("Job is already running. Status dismissed.")
+            return
+
+        # 3. Atomically remove from the Redis queue
+        was_removed = await QueueService.remove_from_queue(job_id, queue_type=job.queue_type)
+        if not was_removed:
+            # Race condition: worker acquired the job from the queue just before the click
+            await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
+            try:
+                await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+            except Exception:
+                try:
+                    await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+                except Exception:
+                    pass
+            await callback.answer("Job was just acquired by a worker. Status dismissed.")
+            return
+
+        # 4. Confirmed queued: remove user request
         await session.delete(user_req)
         await session.commit()
 
-        # Check remaining subscribers for this job
+        # Check remaining subscribers
         count_stmt = select(func.count(JobRequest.id)).where(JobRequest.job_id == job_id)
         count_res = await session.execute(count_stmt)
         remaining_subscribers = count_res.scalar() or 0
 
         if remaining_subscribers > 0:
             logger.info(
-                f"User {user_id} unsubscribed from job {job_id}. {remaining_subscribers} subscribers remain."
+                f"User {user_id} unsubscribed from queued job {job_id}. {remaining_subscribers} subscribers remain."
             )
+            # Re-enqueue for remaining subscribers if it was removed
+            await QueueService.push_job(job_id, queue_type=job.queue_type)
             await callback.answer("You have cancelled your subscription. The job continues for other users.", show_alert=True)
             try:
-                await callback.message.edit_text("❌ <i>You cancelled your request.</i>")
+                await callback.message.edit_text("❌ <i>You cancelled your request.</i>", reply_markup=None)
             except Exception:
-                pass
+                try:
+                    await callback.message.edit_caption(caption="❌ <i>You cancelled your request.</i>", reply_markup=None)
+                except Exception:
+                    pass
             return
 
-        # Zero subscribers remain: cancel the underlying job!
-        logger.info(f"Zero subscribers remain for job {job_id}. Terminating job.")
+        # 5. Zero subscribers remain: update PostgreSQL state and release cache lock
+        logger.info(f"Zero subscribers remain for queued job {job_id}. Marking CANCELLED.")
+        job.status = JobStatus.CANCELLED.value
+        await session.commit()
+
         await QueueService.signal_cancel(job_id)
-        await QueueService.remove_from_queue(job_id)
+        if getattr(job, "cache_key", None):
+            await QueueService.release_cache_lock(job.cache_key, job_id)
+
+        try:
+            await callback.message.edit_text("❌ <b>Job cancelled and removed from queue.</b>", reply_markup=None)
+        except Exception:
+            try:
+                await callback.message.edit_caption(caption="❌ <b>Job cancelled and removed from queue.</b>", reply_markup=None)
+            except Exception:
+                pass
+
+        await callback.answer("Job cancelled.")
+
+
+@queue_router.callback_query(lambda c: c.data and c.data.startswith("q_dismiss:"))
+async def on_dismiss_job(callback: CallbackQuery, bot: Bot):
+    """
+    Dismisses the UI status message for active downloading or processing jobs.
+    Per design, this does NOT terminate or interrupt the background download or transcoding.
+    """
+    user_id = callback.from_user.id
+    job_id = callback.data.split(":")[1]
+
+    async with AsyncSessionLocal() as session:
+        # Validate ownership
+        stmt = select(JobRequest).where(
+            JobRequest.job_id == job_id, JobRequest.user_id == user_id
+        )
+        res = await session.execute(stmt)
+        user_req = res.scalar_one_or_none()
+
+        if not user_req:
+            await callback.answer("You are not authorized for this job.", show_alert=True)
+            return
 
         job_stmt = select(Job).where(Job.id == job_id)
         job_res = await session.execute(job_stmt)
         job = job_res.scalar_one_or_none()
-        if job and job.status not in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
-            job.status = JobStatus.CANCELLED.value
-            await session.commit()
+
+        if job and job.status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
+            await callback.answer("Job has already finished.", show_alert=True)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+
+        # Mark only the request's UI as dismissed
+        await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
 
         try:
-            await callback.message.edit_text("❌ <b>Job cancelled and removed from queue.</b>")
+            await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
         except Exception:
-            pass
+            try:
+                await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+            except Exception:
+                pass
 
-        await callback.answer("Job cancelled.")
+        await callback.answer("Status dismissed.")

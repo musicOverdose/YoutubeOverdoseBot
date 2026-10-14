@@ -1,13 +1,16 @@
+import json
 import os
 import uuid
+from typing import Optional
 from aiogram import Bot, Router
 from aiogram.enums import ParseMode
-from aiogram.types import FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 from src.bot.handlers.base import get_or_create_user
-from src.bot.keyboards import build_quality_keyboard
+from src.bot.keyboards import build_extraction_keyboard, build_quality_keyboard
 from src.core.config import settings
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
+from src.core.redis import get_redis_client
 from src.services.must_join_service import MustJoinService
 from src.services.setting_service import DEFAULT_UNSUPPORTED_LINK_MESSAGE, SettingService
 from src.services.thumbnail_service import ThumbnailService
@@ -17,26 +20,56 @@ logger = setup_logger("url_handler")
 url_router = Router()
 
 
-async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source_id: str) -> None:
+async def process_youtube_url(
+    bot: Bot, chat_id: int, canonical_url: str, source_id: str, user_id: Optional[int] = None
+) -> None:
     """
     Extracts video metadata, validates duration, and sends the quality selection menu.
+    Associates the extraction request with user_id and chat_id to allow cancelling.
     Can be called directly or resumed after Must-Join verification.
     """
-    status_msg = await bot.send_message(chat_id=chat_id, text="🔎 <i>Extracting video information...</i>")
+    request_id = uuid.uuid4().hex[:12]
+    ext_key = f"ytdl:ext_req:{request_id}"
+    r = get_redis_client()
+    try:
+        await r.set(
+            ext_key,
+            json.dumps({"user_id": user_id, "chat_id": chat_id, "status": "active"}),
+            ex=300,
+        )
+    except Exception as e:
+        logger.debug("Failed to set extraction request in redis: %s", e)
+
+    status_msg = await bot.send_message(
+        chat_id=chat_id,
+        text="🔎 <i>Extracting video information...</i>",
+        reply_markup=build_extraction_keyboard(request_id),
+    )
     try:
         info = await YtDlpService.extract_metadata(canonical_url)
     except Exception as e:
         logger.error(f"Failed to extract metadata for {canonical_url}: {e}")
         try:
-            await status_msg.edit_text("❌ Failed to retrieve video details. Please ensure the link is valid and public.")
+            await status_msg.edit_text("❌ Failed to retrieve video details. Please ensure the link is valid and public.", reply_markup=None)
         except Exception:
             pass
         return
 
+    # Check if request was abandoned during extraction
+    try:
+        raw_req = await r.get(ext_key)
+        if raw_req:
+            req_data = json.loads(raw_req)
+            if req_data.get("status") == "cancelled":
+                logger.info("Extraction request %s was cancelled by user. Aborting.", request_id)
+                return
+    except Exception:
+        pass
+
     # Reject livestreams early with friendly notification
     if info.get("is_live") or info.get("live_status") == "is_live":
         try:
-            await status_msg.edit_text("❌ Livestreams are not supported. Please provide a link to a recorded video.")
+            await status_msg.edit_text("❌ Livestreams are not supported. Please provide a link to a recorded video.", reply_markup=None)
         except Exception:
             pass
         return
@@ -71,6 +104,18 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
             output_path=temp_preview,
             is_vertical=is_vertical,
         )
+
+        # Check again if cancelled before sending photo
+        try:
+            raw_req = await r.get(ext_key)
+            if raw_req:
+                req_data = json.loads(raw_req)
+                if req_data.get("status") == "cancelled":
+                    logger.info("Extraction request %s was cancelled by user. Aborting before sending.", request_id)
+                    return
+        except Exception:
+            pass
+
         if preview_ready and os.path.exists(temp_preview) and os.path.getsize(temp_preview) > 0:
             await bot.send_photo(
                 chat_id=chat_id,
@@ -80,6 +125,10 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
             )
             try:
                 await status_msg.delete()
+            except Exception:
+                pass
+            try:
+                await r.delete(ext_key)
             except Exception:
                 pass
             return
@@ -92,6 +141,16 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
             except OSError:
                 pass
 
+    # Final check if cancelled before text message
+    try:
+        raw_req = await r.get(ext_key)
+        if raw_req:
+            req_data = json.loads(raw_req)
+            if req_data.get("status") == "cancelled":
+                return
+    except Exception:
+        pass
+
     await bot.send_message(
         chat_id=chat_id,
         text=f"🎬 <b>{title}</b>",
@@ -101,6 +160,54 @@ async def process_youtube_url(bot: Bot, chat_id: int, canonical_url: str, source
         await status_msg.delete()
     except Exception:
         pass
+    try:
+        await r.delete(ext_key)
+    except Exception:
+        pass
+
+
+@url_router.callback_query(lambda c: c.data and c.data.startswith("ext_cancel:"))
+async def on_cancel_extraction(callback: CallbackQuery, bot: Bot):
+    """
+    Cancels an in-flight metadata extraction request and marks it abandoned.
+    Prevents subsequent quality selection menu or job creation.
+    """
+    request_id = callback.data.split(":")[1]
+    ext_key = f"ytdl:ext_req:{request_id}"
+    r = get_redis_client()
+
+    raw_req = None
+    try:
+        raw_req = await r.get(ext_key)
+    except Exception as e:
+        logger.debug("Error reading extraction key %s: %s", ext_key, e)
+
+    if raw_req:
+        try:
+            req_data = json.loads(raw_req)
+            expected_user = req_data.get("user_id")
+            if expected_user and callback.from_user.id != expected_user:
+                await callback.answer("You cannot cancel someone else's request.", show_alert=True)
+                return
+            req_data["status"] = "cancelled"
+            await r.set(ext_key, json.dumps(req_data), ex=300)
+        except Exception:
+            pass
+    else:
+        try:
+            await r.set(ext_key, json.dumps({"status": "cancelled", "user_id": callback.from_user.id}), ex=300)
+        except Exception:
+            pass
+
+    try:
+        await callback.message.edit_text("❌ <i>Request cancelled.</i>", reply_markup=None)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+    await callback.answer("Request cancelled.")
 
 
 @url_router.message(lambda msg: msg.text and extract_youtube_id(msg.text) is not None)
@@ -130,7 +237,7 @@ async def handle_youtube_url(message: Message, bot: Bot):
             return
 
     # 2. PROCEED WITH URL PROCESSING
-    await process_youtube_url(bot, message.chat.id, canonical_url, source_id)
+    await process_youtube_url(bot, message.chat.id, canonical_url, source_id, user_id=user_id)
 
 
 @url_router.message(

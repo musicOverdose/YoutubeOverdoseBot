@@ -246,7 +246,7 @@ class JobProcessor:
                 {"chat_id": r.chat_id, "message_id": r.status_message_id}
                 for r in job_requests
             ]
-            notifier = StatusNotifier(bot, subscribers)
+            notifier = StatusNotifier(bot, subscribers, job_id=job_id)
 
             # Check pre-flight disk safety
             safe_disk, disk_err = SystemService.check_disk_safety()
@@ -393,7 +393,7 @@ class JobProcessor:
 
                     download_template = os.path.join(job_dir, "input.%(ext)s")
                     ydl_format = YtDlpService.build_video_format_spec(target_height, target_codec, is_muted=is_muted)
-                    ydl_opts = YtDlpService.get_base_opts()
+                    ydl_opts = YtDlpService.get_download_opts()
                     ydl_opts.update({
                         "outtmpl": download_template,
                         "format": ydl_format,
@@ -756,7 +756,7 @@ class JobProcessor:
                         safe_audio_filename = f"{base_fn}_[clip_{format_clip_filename_tag(job.clip_start)}-{format_clip_filename_tag(job.clip_end)}]{ext_fn}"
 
                     audio_template = os.path.join(job_dir, "audio.%(ext)s")
-                    ydl_opts = YtDlpService.get_base_opts()
+                    ydl_opts = YtDlpService.get_download_opts()
                     ydl_opts.update({
                         "outtmpl": audio_template,
                         "format": "bestaudio/best",

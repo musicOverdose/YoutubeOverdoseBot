@@ -11,10 +11,10 @@ from src.models.channel import RequiredChannel
 
 def test_ytdlp_base_opts_performance_and_reliability():
     """
-    Verifies that get_base_opts sets optimal throughput flags:
+    Verifies that get_download_opts sets optimal throughput flags:
     concurrent_fragments=16, buffersize=4MB, trim_file_name=220, retries=10.
     """
-    opts = YtDlpService.get_base_opts()
+    opts = YtDlpService.get_download_opts()
     assert opts.get("concurrent_fragments") == 16
     assert opts.get("buffersize") == 4194304
     assert opts.get("trim_file_name") == 220

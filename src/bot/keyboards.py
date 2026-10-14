@@ -251,13 +251,39 @@ def build_must_join_keyboard(
 
 def build_queue_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
     """
-    Interactive buttons on active/queued jobs:
-    [📊 Queue Status]
-    (No cancel button for active downloads per user constraint)
+    Interactive buttons on queued jobs:
+    [📊 Queue Status]  [❌ Cancel]
     """
     keyboard = [
         [
             InlineKeyboardButton(text="📊 Queue Status", callback_data=f"q_stat:{job_id}"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data=f"q_cancel:{job_id}"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_progress_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
+    """
+    Interactive button on active download/processing jobs:
+    [✖️ Dismiss Status]
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(text="✖️ Dismiss Status", callback_data=f"q_dismiss:{job_id}"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_extraction_keyboard(request_id: str) -> InlineKeyboardMarkup:
+    """
+    Cancel button for initial metadata extraction:
+    [❌ Cancel Request]
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(text="❌ Cancel Request", callback_data=f"ext_cancel:{request_id}"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

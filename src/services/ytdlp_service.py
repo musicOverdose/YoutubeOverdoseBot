@@ -278,7 +278,8 @@ _METADATA_CACHE_TTL: float = 300.0  # 5 minutes
 
 class YtDlpService:
     @staticmethod
-    def get_base_opts(cookies_file: Optional[str] = None) -> Dict[str, Any]:
+    def get_common_base_opts(cookies_file: Optional[str] = None) -> Dict[str, Any]:
+        """Common base options shared across all yt-dlp invocations."""
         opts: Dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
@@ -286,19 +287,7 @@ class YtDlpService:
             "no_color": True,
             "ignoreerrors": False,
             "noplaylist": not settings.PLAYLISTS_ENABLED,
-            "socket_timeout": 30,
-            "concurrent_fragments": 16,
-            "buffersize": 4194304,
-            "trim_file_name": 220,
-            "retries": 10,
-            "fragment_retries": 10,
-            "skip_unavailable_fragments": True,
-            "retry_sleep_functions": {
-                "http": lambda n: 3,
-                "fragment": lambda n: 3,
-                "file_access": lambda n: 3,
-                "extractor": lambda n: 3,
-            },
+            "source_address": "0.0.0.0",
         }
 
         active_cookie_file = cookies_file or settings.YTDLP_COOKIES_FILE
@@ -316,6 +305,50 @@ class YtDlpService:
                 }
 
         return opts
+
+    @classmethod
+    def get_metadata_opts(cls, cookies_file: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Lightweight metadata extraction options.
+        Omits download-only concurrency, buffers, and sleep retry configurations.
+        Preserves yt-dlp default DASH manifest extraction for accurate format discovery.
+        """
+        opts = cls.get_common_base_opts(cookies_file)
+        opts.update({
+            "socket_timeout": 10,
+            "retries": 2,
+            "extractor_retries": 2,
+        })
+        return opts
+
+    @classmethod
+    def get_download_opts(cls, cookies_file: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Media download options configured for high performance, fragment concurrency,
+        larger buffers, and robust streaming media retry functions.
+        """
+        opts = cls.get_common_base_opts(cookies_file)
+        opts.update({
+            "socket_timeout": 30,
+            "concurrent_fragments": 16,
+            "buffersize": 4194304,
+            "trim_file_name": 220,
+            "retries": 10,
+            "fragment_retries": 10,
+            "skip_unavailable_fragments": True,
+            "retry_sleep_functions": {
+                "http": lambda n: 3,
+                "fragment": lambda n: 3,
+                "file_access": lambda n: 3,
+                "extractor": lambda n: 3,
+            },
+        })
+        return opts
+
+    @classmethod
+    def get_base_opts(cls, cookies_file: Optional[str] = None) -> Dict[str, Any]:
+        """Backward-compatible alias pointing to lightweight metadata options."""
+        return cls.get_metadata_opts(cookies_file)
 
     @classmethod
     async def extract_metadata(
@@ -347,7 +380,7 @@ class YtDlpService:
 
         # 3. Extract via yt-dlp in executor (non-blocking)
         loop = asyncio.get_running_loop()
-        opts = cls.get_base_opts(cookies_file)
+        opts = cls.get_metadata_opts(cookies_file)
 
         def _extract() -> Dict[str, Any]:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -664,7 +697,7 @@ class YtDlpService:
         size_source is one of: "exact", "approximate", "estimated".
         """
         format_spec = cls.build_video_format_spec(target_height, target_codec, is_muted=is_muted)
-        ydl_opts = cls.get_base_opts()
+        ydl_opts = cls.get_metadata_opts()
         ydl_opts["format"] = format_spec
 
         # Perform no-download format selection using yt-dlp
@@ -949,7 +982,7 @@ class YtDlpService:
         backoff_delays = [10.0, 30.0, 60.0]
         max_retries = len(backoff_delays)
 
-        opts = cls.get_base_opts(cookies_file)
+        opts = cls.get_metadata_opts(cookies_file)
         opts.update({
             "outtmpl": output_template,
             "skip_download": True,

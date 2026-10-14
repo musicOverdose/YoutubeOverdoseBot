@@ -63,6 +63,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - web_secrets:/config/master:rw
       - bot_runtime_secrets:/config/runtime:rw
@@ -79,6 +82,9 @@ services:
       target: bot
     container_name: ytdl_bot
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     env_file:
       - path: .env
         required: false
@@ -107,6 +113,9 @@ services:
       target: worker
     container_name: ytdl_worker
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     env_file:
       - path: .env
         required: false

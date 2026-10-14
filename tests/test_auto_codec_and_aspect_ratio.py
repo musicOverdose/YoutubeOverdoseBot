@@ -128,13 +128,13 @@ async def test_on_download_thumbnail_delivers_document(tmp_path):
         assert kwargs.get("caption") is None
 
 
-def test_build_queue_status_keyboard_has_no_cancel_button():
+def test_build_queue_status_keyboard_has_cancel_button():
     kb = build_queue_status_keyboard("job-12345")
     all_buttons = [btn for row in kb.inline_keyboard for btn in row]
     callbacks = [btn.callback_data for btn in all_buttons]
 
     assert "q_stat:job-12345" in callbacks
-    assert not any("cancel" in c.lower() for c in callbacks)
+    assert "q_cancel:job-12345" in callbacks
 
 
 @pytest.mark.asyncio
