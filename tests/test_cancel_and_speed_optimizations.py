@@ -244,3 +244,113 @@ async def test_status_notifier_does_not_attach_dismiss_button_to_active_progress
     assert bot_mock.edit_message_text.call_count == 2
     for call in bot_mock.edit_message_text.call_args_list:
         assert call.kwargs.get("reply_markup") is None
+
+
+# ==============================================================================
+# 5. POSITION 1 PROGRESS BAR & CLEAN QUEUE TESTS
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_position_1_with_idle_worker_shows_progress_bar_directly():
+    """Verifies that if user is at position 1 and worker is idle, progress bar is shown directly without queue message."""
+    from src.bot.handlers.codec_handler import on_codec_selected
+    callback = MagicMock()
+    callback.data = "c:vid123:H264:720"
+    callback.from_user.id = 111
+    callback.message = AsyncMock()
+    callback.message.chat.id = 222
+    callback.message.message_id = 333
+    callback.message.answer = AsyncMock()
+    callback.answer = AsyncMock()
+
+    simulated_info = {
+        "id": "vid123",
+        "title": "Test Video",
+        "duration": 60,
+        "formats": [
+            {"format_id": "137", "height": 720, "vcodec": "avc1.64001f", "acodec": "none", "filesize": 5000000},
+            {"format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "filesize": 1000000},
+        ],
+    }
+
+    with patch("src.bot.handlers.codec_handler.AsyncSessionLocal") as mock_session_cls, \
+         patch("src.bot.handlers.codec_handler.MustJoinService.enforce_must_join_callback", new=AsyncMock(return_value=True)), \
+         patch("src.bot.handlers.codec_handler.YtDlpService.extract_metadata", new=AsyncMock(return_value=simulated_info)), \
+         patch("src.bot.handlers.codec_handler.CacheService.get_cached_entry", new=AsyncMock(return_value=None)), \
+         patch("src.bot.handlers.codec_handler.QueueService.check_user_limits", new=AsyncMock(return_value=(True, None))), \
+         patch("src.bot.handlers.codec_handler.QueueService.push_job", new=AsyncMock(return_value=1)), \
+         patch("src.bot.handlers.codec_handler.QueueService.get_active_job_ids", new=AsyncMock(return_value=[])), \
+         patch("src.bot.handlers.codec_handler.get_redis_client"):
+
+        session = AsyncMock()
+        mock_res = MagicMock()
+        mock_res.scalars.return_value.first.return_value = None
+        session.execute.return_value = mock_res
+        mock_session_cls.return_value.__aenter__.return_value = session
+
+        await on_codec_selected(callback, AsyncMock())
+
+        callback.message.answer.assert_called_once()
+        text = callback.message.answer.call_args[0][0]
+        markup = callback.message.answer.call_args.kwargs.get("reply_markup")
+
+        # Must show progress bar directly, without buttons
+        assert "Please wait..." in text
+        assert "Downloading..." in text
+        assert markup is None
+        callback.answer.assert_awaited_once_with("Starting download...")
+
+
+@pytest.mark.asyncio
+async def test_position_greater_than_1_shows_clean_queue_message_with_cancel_only():
+    """Verifies that if user is at position > 1 or worker is busy, clean queue message with only cancel is shown."""
+    from src.bot.handlers.codec_handler import on_codec_selected
+    callback = MagicMock()
+    callback.data = "c:vid123:H264:720"
+    callback.from_user.id = 111
+    callback.message = AsyncMock()
+    callback.message.chat.id = 222
+    callback.message.message_id = 333
+    callback.message.answer = AsyncMock()
+    callback.answer = AsyncMock()
+
+    simulated_info = {
+        "id": "vid123",
+        "title": "Test Video",
+        "duration": 60,
+        "formats": [
+            {"format_id": "137", "height": 720, "vcodec": "avc1.64001f", "acodec": "none", "filesize": 5000000},
+            {"format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "filesize": 1000000},
+        ],
+    }
+
+    with patch("src.bot.handlers.codec_handler.AsyncSessionLocal") as mock_session_cls, \
+         patch("src.bot.handlers.codec_handler.MustJoinService.enforce_must_join_callback", new=AsyncMock(return_value=True)), \
+         patch("src.bot.handlers.codec_handler.YtDlpService.extract_metadata", new=AsyncMock(return_value=simulated_info)), \
+         patch("src.bot.handlers.codec_handler.CacheService.get_cached_entry", new=AsyncMock(return_value=None)), \
+         patch("src.bot.handlers.codec_handler.QueueService.check_user_limits", new=AsyncMock(return_value=(True, None))), \
+         patch("src.bot.handlers.codec_handler.QueueService.push_job", new=AsyncMock(return_value=2)), \
+         patch("src.bot.handlers.codec_handler.QueueService.get_active_job_ids", new=AsyncMock(return_value=["other-job"])), \
+         patch("src.bot.handlers.codec_handler.get_redis_client"):
+
+        session = AsyncMock()
+        mock_res = MagicMock()
+        mock_res.scalars.return_value.first.return_value = None
+        session.execute.return_value = mock_res
+        mock_session_cls.return_value.__aenter__.return_value = session
+
+        await on_codec_selected(callback, AsyncMock())
+
+        callback.message.answer.assert_called_once()
+        text = callback.message.answer.call_args[0][0]
+        markup = callback.message.answer.call_args.kwargs.get("reply_markup")
+
+        # Must show clean queue message
+        assert "Queued" in text
+        assert "Position #2" in text
+        assert "Active:" not in text  # Bloat removed
+        assert markup is not None
+        all_buttons = [btn for row in markup.inline_keyboard for btn in row]
+        assert len(all_buttons) == 1
+        assert all_buttons[0].callback_data.startswith("q_cancel:")
+        callback.answer.assert_awaited_once_with("Added to queue!")

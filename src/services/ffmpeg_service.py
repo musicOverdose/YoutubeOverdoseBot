@@ -394,9 +394,9 @@ class FFmpegService:
                 # Keyframe-accurate encode for clips: ensures Frame 0 is an IDR keyframe at pts=0.000000
                 # Resolves blurry/distorted first few seconds on iOS and mobile hardware decoders
                 if target_codec.upper() == "H265":
-                    cmd.extend(["-c:v", "libx265", "-preset", "fast", "-crf", "24", "-tag:v", "hvc1"])
+                    cmd.extend(["-c:v", "libx265", "-preset", "ultrafast", "-crf", "26", "-tag:v", "hvc1"])
                 else:
-                    cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+                    cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "22"])
             else:
                 # Full video download: 100% stream copy (zero re-encoding)
                 cmd.extend(["-c:v", "copy"])

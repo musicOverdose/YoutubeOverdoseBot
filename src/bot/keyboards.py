@@ -251,12 +251,11 @@ def build_must_join_keyboard(
 
 def build_queue_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
     """
-    Interactive buttons on queued jobs:
-    [📊 Queue Status]  [❌ Cancel]
+    Interactive cancel button for queued jobs:
+    [❌ Cancel]
     """
     keyboard = [
         [
-            InlineKeyboardButton(text="📊 Queue Status", callback_data=f"q_stat:{job_id}"),
             InlineKeyboardButton(text="❌ Cancel", callback_data=f"q_cancel:{job_id}"),
         ]
     ]

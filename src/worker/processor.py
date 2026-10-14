@@ -397,7 +397,7 @@ class JobProcessor:
                     ydl_opts.update({
                         "outtmpl": download_template,
                         "format": ydl_format,
-                        "writethumbnail": True,
+                        "writethumbnail": not is_clip,
                     })
 
                     clip_offset = None
@@ -492,95 +492,99 @@ class JobProcessor:
                     input_file = input_video_files[0]
                     found_thumb_file = input_thumb_files[0] if input_thumb_files else None
 
-                    # 1. Look up highest-quality YouTube thumbnail URLs & pre-download cover artwork
+                    # 1. Look up highest-quality YouTube thumbnail URLs & pre-download cover artwork (full videos only)
                     candidate_thumb_urls = []
                     meta_info = None
-                    try:
-                        meta_info = await YtDlpService.extract_metadata(job.canonical_url, use_cache=True)
-                        candidate_thumb_urls = ThumbnailService.get_candidate_thumbnail_urls(
-                            meta_info, source_id=job.source_id
-                        )
-                    except Exception as meta_e:
-                        logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
-
-                    # Determine video orientation and aspect ratio early so cover image can be cropped for vertical Shorts
-                    is_vertical = False
-                    target_ratio = None
-                    try:
-                        _dur, early_w, early_h = await FFmpegService.extract_video_metadata(input_file)
-                        if early_w > 0 and early_h > 0:
-                            is_vertical = (early_h > early_w)
-                            if is_vertical:
-                                target_ratio = early_w / float(early_h)
-                    except Exception as probe_err:
-                        logger.debug("Could not probe input_file early for orientation: %s", probe_err)
-                        if "/shorts/" in (job.canonical_url or "").lower():
-                            is_vertical = True
-                            target_ratio = 9 / 16.0
-
                     raw_cover_path = os.path.join(job_dir, "cover.jpg")
                     cover_downloaded = False
-                    try:
-                        res = await ThumbnailService.download_full_thumbnail_file(
-                            info=meta_info,
-                            source_id=job.source_id,
-                            output_path=raw_cover_path,
-                            is_vertical=is_vertical,
-                            target_ratio=target_ratio,
-                        )
-                        if res and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
-                            cover_downloaded = True
-                    except Exception as ce:
-                        logger.debug("Could not pre-download cover artwork for video: %s", ce)
 
-                    if not cover_downloaded and found_thumb_file and os.path.exists(found_thumb_file):
+                    if not is_clip:
                         try:
-                            ok_conv = ThumbnailService.process_image_file(
-                                found_thumb_file,
-                                raw_cover_path,
+                            meta_info = await YtDlpService.extract_metadata(job.canonical_url, use_cache=True)
+                            candidate_thumb_urls = ThumbnailService.get_candidate_thumbnail_urls(
+                                meta_info, source_id=job.source_id
+                            )
+                        except Exception as meta_e:
+                            logger.debug("Could not extract metadata for thumbnail URLs: %s", meta_e)
+
+                        # Determine video orientation and aspect ratio early so cover image can be cropped for vertical Shorts
+                        is_vertical = False
+                        target_ratio = None
+                        early_w, early_h = 0, 0
+                        _dur = 0
+                        try:
+                            _dur, early_w, early_h = await FFmpegService.extract_video_metadata(input_file)
+                            if early_w > 0 and early_h > 0:
+                                is_vertical = (early_h > early_w)
+                                if is_vertical:
+                                    target_ratio = early_w / float(early_h)
+                        except Exception as probe_err:
+                            logger.debug("Could not probe input_file early for orientation: %s", probe_err)
+                            if "/shorts/" in (job.canonical_url or "").lower():
+                                is_vertical = True
+                                target_ratio = 9 / 16.0
+
+                        try:
+                            res = await ThumbnailService.download_full_thumbnail_file(
+                                info=meta_info,
+                                source_id=job.source_id,
+                                output_path=raw_cover_path,
                                 is_vertical=is_vertical,
                                 target_ratio=target_ratio,
                             )
-                            if ok_conv and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                            if res and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                                 cover_downloaded = True
-                        except Exception as fe:
-                            logger.debug("Could not convert found_thumb_file to cover: %s", fe)
+                        except Exception as ce:
+                            logger.debug("Could not pre-download cover artwork for video: %s", ce)
 
-                    # Hybrid Thumbnail Selection for full videos:
-                    # Check resolution fidelity of downloaded cover vs native video
-                    use_frame_extraction = False
-                    if not is_clip and early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
-                        # Video is HD (>= 720p). If cover art is low-res (e.g. YouTube auto-generated 480p pillarbox),
-                        # extract crystal-clear native frame directly from the HD video stream!
-                        if cover_downloaded and os.path.exists(raw_cover_path):
+                        if not cover_downloaded and found_thumb_file and os.path.exists(found_thumb_file):
                             try:
-                                with Image.open(raw_cover_path) as cimg:
-                                    cw, ch = cimg.size
-                                    if (is_vertical and cw < 500) or (not is_vertical and max(cw, ch) < 640):
-                                        logger.info(
-                                            "Cover art resolution is low (%dx%d) for HD video (%dx%d). "
-                                            "Extracting native HD frame directly from video stream...",
-                                            cw, ch, early_w, early_h,
-                                        )
-                                        use_frame_extraction = True
-                            except Exception as c_err:
-                                logger.debug("Error checking cover art dimensions: %s", c_err)
-                        else:
-                            use_frame_extraction = True
+                                ok_conv = ThumbnailService.process_image_file(
+                                    found_thumb_file,
+                                    raw_cover_path,
+                                    is_vertical=is_vertical,
+                                    target_ratio=target_ratio,
+                                )
+                                if ok_conv and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                                    cover_downloaded = True
+                            except Exception as fe:
+                                logger.debug("Could not convert found_thumb_file to cover: %s", fe)
 
-                    if use_frame_extraction and not is_clip:
-                        try:
-                            frame_ok = await ThumbnailService.extract_frame_fallback(
-                                video_path=input_file,
-                                output_thumb_path=raw_cover_path,
-                                duration=_dur,
-                                is_vertical=is_vertical,
-                                target_ratio=target_ratio,
-                            )
-                            if frame_ok and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
-                                cover_downloaded = True
-                        except Exception as frame_err:
-                            logger.warning("Frame extraction error: %s", frame_err)
+                        # Hybrid Thumbnail Selection for full videos:
+                        # Check resolution fidelity of downloaded cover vs native video
+                        use_frame_extraction = False
+                        if early_w > 0 and early_h > 0 and max(early_w, early_h) >= 720:
+                            # Video is HD (>= 720p). If cover art is low-res (e.g. YouTube auto-generated 480p pillarbox),
+                            # extract crystal-clear native frame directly from the HD video stream!
+                            if cover_downloaded and os.path.exists(raw_cover_path):
+                                try:
+                                    with Image.open(raw_cover_path) as cimg:
+                                        cw, ch = cimg.size
+                                        if (is_vertical and cw < 500) or (not is_vertical and max(cw, ch) < 640):
+                                            logger.info(
+                                                "Cover art resolution is low (%dx%d) for HD video (%dx%d). "
+                                                "Extracting native HD frame directly from video stream...",
+                                                cw, ch, early_w, early_h,
+                                            )
+                                            use_frame_extraction = True
+                                except Exception as c_err:
+                                    logger.debug("Error checking cover art dimensions: %s", c_err)
+                            else:
+                                use_frame_extraction = True
+
+                        if use_frame_extraction:
+                            try:
+                                frame_ok = await ThumbnailService.extract_frame_fallback(
+                                    video_path=input_file,
+                                    output_thumb_path=raw_cover_path,
+                                    duration=_dur,
+                                    is_vertical=is_vertical,
+                                    target_ratio=target_ratio,
+                                )
+                                if frame_ok and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
+                                    cover_downloaded = True
+                            except Exception as frame_err:
+                                logger.warning("Frame extraction error: %s", frame_err)
 
                     job.status = JobStatus.PROCESSING.value
                     await session.commit()

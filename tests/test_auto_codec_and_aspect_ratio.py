@@ -133,8 +133,7 @@ def test_build_queue_status_keyboard_has_cancel_button():
     all_buttons = [btn for row in kb.inline_keyboard for btn in row]
     callbacks = [btn.callback_data for btn in all_buttons]
 
-    assert "q_stat:job-12345" in callbacks
-    assert "q_cancel:job-12345" in callbacks
+    assert callbacks == ["q_cancel:job-12345"]
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from src.services.ytdlp_service import YtDlpService, get_canonical_url
 
 from typing import Optional
 from src.utils.timestamp_parser import format_timestamp
+from src.worker.notifier import StatusNotifier
 
 logger = setup_logger("audio_handler")
 audio_router = Router()
@@ -204,13 +205,22 @@ async def enqueue_audio_job(
         active_count = len(await QueueService.get_active_job_ids(queue_type="VIDEO"))
         limit = getattr(settings, "MAX_ACTIVE_VIDEO_JOBS", 1)
 
-        status_msg = await callback.message.answer(
-            f"⏳ <b>Added to queue</b>\n"
-            f"💿 <b>MP3 Audio</b>{clip_tag}\n"
-            f"Position: #{position}\n"
-            f"Active: {active_count} / {limit}",
-            reply_markup=build_queue_status_keyboard(job_id),
-        )
+        if position == 1 and active_count < limit:
+            bar = StatusNotifier.render_progress_bar(5.0)
+            status_msg = await callback.message.answer(
+                f"⚡️ <b>Please wait...</b>\n{bar}\n📥 Downloading...",
+                reply_markup=None,
+            )
+            toast_text = "Starting download..."
+        else:
+            status_msg = await callback.message.answer(
+                f"⏳ <b>Queued</b> • Position #{position}\n"
+                f"💿 <b>MP3 Audio</b>{clip_tag}\n"
+                f"<i>Your download will begin automatically.</i>",
+                reply_markup=build_queue_status_keyboard(job_id),
+            )
+            toast_text = "Added to queue!"
+
         req.status_message_id = status_msg.message_id
         await session.commit()
         try:
@@ -219,4 +229,4 @@ async def enqueue_audio_job(
         except Exception as r_err:
             logger.debug("Failed saving status_msg_id to redis: %s", r_err)
 
-    await safe_callback_answer(callback, "Added to queue!")
+    await safe_callback_answer(callback, toast_text)
