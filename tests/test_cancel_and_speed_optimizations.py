@@ -12,11 +12,10 @@ from src.services.ytdlp_service import YtDlpService
 from src.worker.notifier import StatusNotifier
 from src.bot.keyboards import (
     build_extraction_keyboard,
-    build_progress_status_keyboard,
     build_queue_status_keyboard,
 )
 from src.bot.handlers.url_handler import on_cancel_extraction, process_youtube_url
-from src.bot.handlers.queue_handler import on_cancel_job, on_dismiss_job
+from src.bot.handlers.queue_handler import on_cancel_job
 
 
 # ==============================================================================
@@ -252,8 +251,7 @@ async def test_cancellation_race_with_job_acquisition_falls_back_to_dismissal():
     mock_user_req = MagicMock()
     
     with patch("src.bot.handlers.queue_handler.AsyncSessionLocal") as mock_session_cls, \
-         patch("src.bot.handlers.queue_handler.QueueService.remove_from_queue", new=AsyncMock(return_value=False)) as mock_rm, \
-         patch("src.bot.handlers.queue_handler.StatusNotifier.mark_ui_dismissed", new=AsyncMock()) as mock_dismiss:
+         patch("src.bot.handlers.queue_handler.QueueService.remove_from_queue", new=AsyncMock(return_value=False)) as mock_rm:
         
         session = AsyncMock()
         mock_session_cls.return_value.__aenter__.return_value = session
@@ -267,54 +265,19 @@ async def test_cancellation_race_with_job_acquisition_falls_back_to_dismissal():
         await on_cancel_job(callback, AsyncMock())
         
         assert mock_job.status == JobStatus.QUEUED.value
-        mock_dismiss.assert_awaited_once_with("job-xyz", 1234)
-        assert "continuing in the background" in callback.message.edit_text.call_args[0][0].lower()
+        callback.answer.assert_awaited_once_with(
+            "Job has already started downloading and cannot be cancelled.", show_alert=True
+        )
+        callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
 
 
 # ==============================================================================
-# 4. ACTIVE JOB DISMISSAL TESTS
+# 4. ACTIVE JOB PROGRESS CLEANLINESS TESTS
 # ==============================================================================
 
 @pytest.mark.asyncio
-async def test_active_job_ui_dismissal_does_not_cancel_underlying_job():
-    """Verifies that clicking Dismiss Status marks UI dismissed without altering job state."""
-    callback = MagicMock()
-    callback.data = "q_dismiss:job-active-1"
-    callback.from_user.id = 777
-    callback.message = AsyncMock()
-    callback.message.chat.id = 4321
-    callback.answer = AsyncMock()
-    
-    mock_job = MagicMock()
-    mock_job.id = "job-active-1"
-    mock_job.status = JobStatus.DOWNLOADING.value
-    
-    mock_user_req = MagicMock()
-    
-    with patch("src.bot.handlers.queue_handler.AsyncSessionLocal") as mock_session_cls, \
-         patch("src.bot.handlers.queue_handler.StatusNotifier.mark_ui_dismissed", new=AsyncMock()) as mock_dismiss, \
-         patch("src.bot.handlers.queue_handler.QueueService.signal_cancel") as mock_sig:
-        
-        session = AsyncMock()
-        mock_session_cls.return_value.__aenter__.return_value = session
-        
-        res1 = MagicMock()
-        res1.scalar_one_or_none.return_value = mock_user_req
-        res2 = MagicMock()
-        res2.scalar_one_or_none.return_value = mock_job
-        session.execute.side_effect = [res1, res2]
-        
-        await on_dismiss_job(callback, AsyncMock())
-        
-        assert mock_job.status == JobStatus.DOWNLOADING.value
-        mock_sig.assert_not_called()
-        mock_dismiss.assert_awaited_once_with("job-active-1", 4321)
-        assert "continuing in the background" in callback.message.edit_text.call_args[0][0].lower()
-
-
-@pytest.mark.asyncio
-async def test_status_notifier_stops_updating_dismissed_chat():
-    """Verifies that StatusNotifier skips message edits for chats that dismissed the UI."""
+async def test_status_notifier_does_not_attach_dismiss_button_to_active_progress():
+    """Verifies that StatusNotifier keeps active download/processing progress bar clean without buttons."""
     bot_mock = AsyncMock()
     requests = [
         {"chat_id": 100, "message_id": 1},
@@ -322,26 +285,8 @@ async def test_status_notifier_stops_updating_dismissed_chat():
     ]
     notifier = StatusNotifier(bot=bot_mock, requests=requests, job_id="job-active-99")
     
-    with patch.object(StatusNotifier, "is_ui_dismissed", new=AsyncMock(side_effect=lambda jid, cid: cid == 100)):
-        await notifier.update("⬇️", "Downloading", "50%", force=True)
-        
-        assert bot_mock.edit_message_text.call_count == 1
-        assert bot_mock.edit_message_text.call_args.kwargs["chat_id"] == 200
-
-
-@pytest.mark.asyncio
-async def test_status_notifier_omits_cancel_button_on_completion_or_failure():
-    """Verifies that final completed or failed messages do not display dismiss buttons."""
-    bot_mock = AsyncMock()
-    notifier = StatusNotifier(bot=bot_mock, requests=[{"chat_id": 200, "message_id": 2}], job_id="job-finished")
+    await notifier.update("⬇️", "Downloading", "50%", force=True)
     
-    with patch.object(StatusNotifier, "is_ui_dismissed", new=AsyncMock(return_value=False)):
-        # Failure
-        await notifier.update("❌", "Failed", "Error details", force=True)
-        kwargs_fail = bot_mock.edit_message_text.call_args.kwargs
-        assert kwargs_fail["reply_markup"] is None
-        
-        # Success
-        await notifier.update("✅", "Completed", "Done", force=True)
-        kwargs_success = bot_mock.edit_message_text.call_args.kwargs
-        assert kwargs_success["reply_markup"] is None
+    assert bot_mock.edit_message_text.call_count == 2
+    for call in bot_mock.edit_message_text.call_args_list:
+        assert call.kwargs.get("reply_markup") is None

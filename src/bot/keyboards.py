@@ -263,19 +263,6 @@ def build_queue_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def build_progress_status_keyboard(job_id: str) -> InlineKeyboardMarkup:
-    """
-    Interactive button on active download/processing jobs:
-    [✖️ Dismiss Status]
-    """
-    keyboard = [
-        [
-            InlineKeyboardButton(text="✖️ Dismiss Status", callback_data=f"q_dismiss:{job_id}"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
 def build_extraction_keyboard(request_id: str) -> InlineKeyboardMarkup:
     """
     Cancel button for initial metadata extraction:

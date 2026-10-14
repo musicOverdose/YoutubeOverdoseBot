@@ -97,32 +97,21 @@ async def on_cancel_job(callback: CallbackQuery, bot: Bot):
         # 2. Check if the job is still queued vs already active
         # Handle races between cancellation and job acquisition
         if job.status != JobStatus.QUEUED.value:
-            # The job has already transitioned to active (e.g. PREPARING, DOWNLOADING, PROCESSING)
-            # Do NOT terminate running active jobs. Treat as UI dismissal per design.
-            await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
             try:
-                await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+                await callback.message.edit_reply_markup(reply_markup=None)
             except Exception:
-                try:
-                    await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
-                except Exception:
-                    pass
-            await callback.answer("Job is already running. Status dismissed.")
+                pass
+            await callback.answer("Job has already started downloading and cannot be cancelled.", show_alert=True)
             return
 
         # 3. Atomically remove from the Redis queue
         was_removed = await QueueService.remove_from_queue(job_id, queue_type=job.queue_type)
         if not was_removed:
-            # Race condition: worker acquired the job from the queue just before the click
-            await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
             try:
-                await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
+                await callback.message.edit_reply_markup(reply_markup=None)
             except Exception:
-                try:
-                    await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
-                except Exception:
-                    pass
-            await callback.answer("Job was just acquired by a worker. Status dismissed.")
+                pass
+            await callback.answer("Job has already started downloading and cannot be cancelled.", show_alert=True)
             return
 
         # 4. Confirmed queued: remove user request
@@ -168,50 +157,3 @@ async def on_cancel_job(callback: CallbackQuery, bot: Bot):
                 pass
 
         await callback.answer("Job cancelled.")
-
-
-@queue_router.callback_query(lambda c: c.data and c.data.startswith("q_dismiss:"))
-async def on_dismiss_job(callback: CallbackQuery, bot: Bot):
-    """
-    Dismisses the UI status message for active downloading or processing jobs.
-    Per design, this does NOT terminate or interrupt the background download or transcoding.
-    """
-    user_id = callback.from_user.id
-    job_id = callback.data.split(":")[1]
-
-    async with AsyncSessionLocal() as session:
-        # Validate ownership
-        stmt = select(JobRequest).where(
-            JobRequest.job_id == job_id, JobRequest.user_id == user_id
-        )
-        res = await session.execute(stmt)
-        user_req = res.scalar_one_or_none()
-
-        if not user_req:
-            await callback.answer("You are not authorized for this job.", show_alert=True)
-            return
-
-        job_stmt = select(Job).where(Job.id == job_id)
-        job_res = await session.execute(job_stmt)
-        job = job_res.scalar_one_or_none()
-
-        if job and job.status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
-            await callback.answer("Job has already finished.", show_alert=True)
-            try:
-                await callback.message.edit_reply_markup(reply_markup=None)
-            except Exception:
-                pass
-            return
-
-        # Mark only the request's UI as dismissed
-        await StatusNotifier.mark_ui_dismissed(job_id, callback.message.chat.id)
-
-        try:
-            await callback.message.edit_text("ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
-        except Exception:
-            try:
-                await callback.message.edit_caption(caption="ℹ️ <i>This job is continuing in the background.</i>", reply_markup=None)
-            except Exception:
-                pass
-
-        await callback.answer("Status dismissed.")

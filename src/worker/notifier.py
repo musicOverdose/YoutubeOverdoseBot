@@ -269,38 +269,18 @@ class StatusNotifier:
         self.last_update_time = now
         self.last_text = text
 
-        markup: Optional[InlineKeyboardMarkup] = None
-        if self.job_id and stage_icon not in ("❌", "✅") and stage_name not in ("Failed", "Completed", "Done"):
-            markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✖️ Dismiss Status",
-                            callback_data=f"q_dismiss:{self.job_id}",
-                        )
-                    ]
-                ]
-            )
-
         for req in self.requests:
             chat_id = req.get("chat_id")
             message_id = req.get("message_id")
             if not chat_id or not message_id:
                 continue
 
-            if self.job_id:
-                try:
-                    if await self.is_ui_dismissed(self.job_id, chat_id):
-                        continue
-                except Exception:
-                    pass
-
             try:
                 await self.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text=text,
-                    reply_markup=markup,
+                    reply_markup=None,
                     parse_mode="HTML",
                 )
             except Exception:
