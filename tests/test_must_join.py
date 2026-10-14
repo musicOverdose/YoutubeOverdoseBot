@@ -1,5 +1,8 @@
 from unittest.mock import AsyncMock, MagicMock
+import json
 import pytest
+from aiogram import Bot
+from aiogram.types import Message
 from src.core.config import settings
 from src.models.channel import RequiredChannel
 from src.services.must_join_service import MustJoinService, is_active_member
@@ -184,7 +187,7 @@ def test_must_join_keyboard_structure():
     Verifies that build_must_join_keyboard builds:
     - One URL button per channel pointing to configured invite/public URL
     - Explicit fallback button for channels missing URLs
-    - Final '✅ I Joined' callback button strictly using 'must_join:check'
+    - NO 'I Joined' button (eliminated for event-driven automatic unblocking)
     """
     from src.bot.keyboards import build_must_join_keyboard
 
@@ -195,7 +198,8 @@ def test_must_join_keyboard_structure():
     kb = build_must_join_keyboard([ch1, ch2, ch3])
     buttons = kb.inline_keyboard
 
-    assert len(buttons) == 4
+    # Exactly 3 buttons for 3 channels, zero extra buttons
+    assert len(buttons) == 3
 
     # ch1: username -> https://t.me/public_chan
     assert buttons[0][0].text == "Channel Public"
@@ -209,9 +213,6 @@ def test_must_join_keyboard_structure():
     assert buttons[2][0].text == "Channel No Link (No Link Configured)"
     assert buttons[2][0].callback_data == "must_join:no_url"
 
-    # Final button: strictly fixed callback
-    assert buttons[3][0].text == "✅ I Joined"
-    assert buttons[3][0].callback_data == "must_join:check"
 
 
 @pytest.mark.asyncio
@@ -291,8 +292,8 @@ async def test_start_handler_must_join_gate(db_session):
     assert mock_msg.answer.called
     call_kwargs = mock_msg.answer.call_args.kwargs
     assert "reply_markup" in call_kwargs
-    # Check that channel buttons are present
-    assert len(call_kwargs["reply_markup"].inline_keyboard) == 2
+    # Check that channel buttons are present (1 channel button, no I Joined button)
+    assert len(call_kwargs["reply_markup"].inline_keyboard) == 1
 
     # Case 2: User joined -> normal welcome message with escaped name
     mock_msg.answer.reset_mock()
@@ -788,6 +789,158 @@ async def test_channel_cache_invalidation_broadcast(monkeypatch):
     assert MustJoinService._channels_cache is None
     assert MustJoinService._channels_cache_ts == 0.0
     assert ("must_join:channels:reload", "1") in published_events
+
+
+@pytest.mark.asyncio
+async def test_enforce_must_join_message_saves_prompt_msg_id_and_start_action(monkeypatch, db_session):
+    """
+    Verifies that enforce_must_join_message:
+    - Stores prompt message ID in Redis under ytdl:must_join_msg:{user_id}
+    - Stores default action_type='start' when no pending_action provided
+    """
+    from tests.mock_redis import MockRedis
+    from src.bot.keyboards import build_must_join_keyboard
+    from src.core.constants import REDIS_KEY_MUST_JOIN_MSG_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+
+    # Add required channel
+    ch = RequiredChannel(chat_id=-1001, title="Test Channel", invite_url="https://t.me/+join_test", enabled=True)
+    db_session.add(ch)
+    await db_session.commit()
+
+    bot = AsyncMock(spec=Bot)
+    msg = AsyncMock(spec=Message)
+    msg.from_user = MagicMock(id=555444, username="testuser", first_name="Test")
+    msg.chat = MagicMock(id=555444)
+
+    sent_msg = MagicMock()
+    sent_msg.chat.id = 555444
+    sent_msg.message_id = 9876
+    msg.answer = AsyncMock(return_value=sent_msg)
+
+    # User is not a member
+    monkeypatch.setattr(
+        MustJoinService,
+        "require_must_join",
+        AsyncMock(return_value=(False, [ch])),
+    )
+
+    allowed = await MustJoinService.enforce_must_join_message(msg, bot, db_session)
+    assert allowed is False
+
+    # Check that prompt message ID was saved in Redis
+    prompt_record = await mock_r.get(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}555444")
+    assert prompt_record == "555444:9876"
+
+    # Check that pending action was stored as 'start'
+    pending_key = "must_join:pending:555444"
+    pending_val = await mock_r.get(pending_key)
+    assert pending_val is not None
+    assert '"action_type": "start"' in pending_val
+
+
+@pytest.mark.asyncio
+async def test_auto_unblock_on_chat_member_joined_deletes_prompt_and_sends_welcome(monkeypatch, db_session):
+    """
+    Verifies that check_and_auto_unblock_user:
+    - Calls bot.delete_message on the recorded prompt message
+    - Deletes prompt record from Redis
+    - Sends Welcome message when pending action is 'start'
+    """
+    from tests.mock_redis import MockRedis
+    from src.bot.handlers.must_join_handler import check_and_auto_unblock_user
+    from src.core.constants import REDIS_KEY_MUST_JOIN_MSG_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.bot.handlers.must_join_handler.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.bot.handlers.must_join_handler.AsyncSessionLocal", lambda: db_session)
+
+    user_id = 777888
+    # Seed prompt message in Redis
+    await mock_r.set(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}", f"{user_id}:12345")
+    # Seed pending start action using service method
+    await MustJoinService.save_pending_action(user_id=user_id, chat_id=user_id, action_type="start", payload={})
+
+    bot = AsyncMock(spec=Bot)
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock()
+
+    # User is authorized (joined all required channels)
+    monkeypatch.setattr(
+        MustJoinService,
+        "require_must_join",
+        AsyncMock(return_value=(True, [])),
+    )
+
+    unblocked = await check_and_auto_unblock_user(bot, user_id)
+    assert unblocked is True
+
+    # Verified bot.delete_message was called with prompt msg id
+    bot.delete_message.assert_called_once_with(chat_id=user_id, message_id=12345)
+
+    # Prompt was deleted from Redis
+    assert await mock_r.get(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}") is None
+
+    # Welcome message was sent
+    assert bot.send_message.called
+
+
+@pytest.mark.asyncio
+async def test_auto_unblock_resumes_pending_url(monkeypatch, db_session):
+    """
+    Verifies that check_and_auto_unblock_user automatically resumes YouTube URL processing
+    when pending action is 'url'.
+    """
+    from tests.mock_redis import MockRedis
+    from src.bot.handlers.must_join_handler import check_and_auto_unblock_user
+    from src.core.constants import REDIS_KEY_MUST_JOIN_MSG_PREFIX
+
+    mock_r = MockRedis()
+    monkeypatch.setattr("src.bot.handlers.must_join_handler.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.services.must_join_service.get_redis_client", lambda: mock_r)
+    monkeypatch.setattr("src.bot.handlers.must_join_handler.AsyncSessionLocal", lambda: db_session)
+
+    user_id = 333444
+    target_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    # Seed prompt message in Redis
+    await mock_r.set(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}", f"{user_id}:999")
+    # Seed pending action using service method
+    await MustJoinService.save_pending_action(
+        user_id=user_id,
+        chat_id=user_id,
+        action_type="url",
+        payload={"url": target_url, "source_id": "test_src_123"},
+    )
+
+    bot = AsyncMock(spec=Bot)
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock()
+
+    processed_calls = []
+
+    async def mock_process(bot, chat_id, url, source_id, user_id=None):
+        processed_calls.append((chat_id, url, source_id, user_id))
+
+    monkeypatch.setattr("src.bot.handlers.url_handler.process_youtube_url", mock_process)
+    monkeypatch.setattr(
+        MustJoinService,
+        "require_must_join",
+        AsyncMock(return_value=(True, [])),
+    )
+
+    unblocked = await check_and_auto_unblock_user(bot, user_id)
+    assert unblocked is True
+
+    # Prompt message was deleted
+    bot.delete_message.assert_called_once_with(chat_id=user_id, message_id=999)
+
+    # URL process was resumed
+    assert len(processed_calls) == 1
+    assert processed_calls[0] == (user_id, target_url, "test_src_123", user_id)
+
 
 
 

@@ -1196,7 +1196,7 @@ class JobProcessor:
                                 text=(
                                     "🔒 <b>Your file is ready!</b>\n"
                                     "However, you left one of the required channels. "
-                                    "Please re-join the channels below and tap <b>Check Again</b> to receive your file."
+                                    "Please re-join the channels below to receive your file."
                                 ),
                                 reply_markup=kb,
                             )

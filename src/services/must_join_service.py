@@ -19,6 +19,7 @@ from src.core.constants import (
     MEMBERSHIP_CACHE_TTL_NON_MEMBER,
     REDIS_KEY_KNOWN_USERS,
     REDIS_KEY_MEMBERSHIP_PREFIX,
+    REDIS_KEY_MUST_JOIN_MSG_PREFIX,
 )
 from src.core.database import AsyncSessionLocal
 from src.core.logger import setup_logger
@@ -308,11 +309,12 @@ class MustJoinService:
         event: ChatMemberUpdated,
         update_id: Optional[int] = None,
         session: Optional[AsyncSession] = None,
-    ) -> None:
+    ) -> bool:
         """
         Handles real-time chat_member updates for required channels.
         Filters out non-required channels and users who have never used the bot.
         Updates Redis: MEMBER (24h TTL) on join/promote, NOT_MEMBER (30s TTL) on leave/kick.
+        Returns True if the user successfully transitioned to MEMBER, False otherwise.
         """
         chat_id = event.chat.id
         if session is not None:
@@ -323,13 +325,13 @@ class MustJoinService:
 
         req_chat_ids = {ch.chat_id for ch in channels}
         if chat_id not in req_chat_ids:
-            return
+            return False
 
         user = event.new_chat_member.user if event.new_chat_member else (
             event.old_chat_member.user if event.old_chat_member else None
         )
         if not user or user.is_bot:
-            return
+            return False
 
         user_id = user.id
 
@@ -342,7 +344,7 @@ class MustJoinService:
                 has_existing = await r.exists(cache_key)
                 if not has_existing:
                     # Unknown channel subscriber who never used the bot -> do not record
-                    return
+                    return False
         except Exception as e:
             logger.debug("Redis known_users check error: %s", e)
 
@@ -350,13 +352,13 @@ class MustJoinService:
         is_member = is_active_member(event.new_chat_member)
 
         if was_member == is_member:
-            return  # No membership state change
+            return False  # No membership state change
 
         event_ts = event.date.timestamp() if event.date else datetime.now(timezone.utc).timestamp()
 
         if is_member:
             logger.info("User %d JOINED required channel %d. Updating Redis -> MEMBER.", user_id, chat_id)
-            await cls.save_membership_record(
+            saved = await cls.save_membership_record(
                 channel_id=chat_id,
                 user_id=user_id,
                 status="MEMBER",
@@ -364,6 +366,7 @@ class MustJoinService:
                 ts=event_ts,
                 source="event",
             )
+            return saved
         else:
             logger.info("User %d LEFT/KICKED from required channel %d. Updating Redis -> NOT_MEMBER.", user_id, chat_id)
             await cls.save_membership_record(
@@ -374,6 +377,7 @@ class MustJoinService:
                 ts=event_ts,
                 source="event",
             )
+            return False
 
     @classmethod
     async def _process_my_chat_member(
@@ -647,6 +651,8 @@ class MustJoinService:
             action_type = pending_action.get("type", "unknown")
             payload = pending_action.get("payload", {})
             await cls.save_pending_action(user_id=user_id, chat_id=chat_id, action_type=action_type, payload=payload)
+        else:
+            await cls.save_pending_action(user_id=user_id, chat_id=chat_id, action_type="start", payload={})
 
         await cls.resolve_missing_invite_links(bot, session, missing_channels)
         kb = build_must_join_keyboard(missing_channels)
@@ -658,11 +664,24 @@ class MustJoinService:
             err_details = ", ".join([f"{c.title} ({c.last_error})" for c in config_errs])
             logger.warning("Must-Join message has channel configuration errors: %s", err_details)
 
+        sent_msg = None
         try:
-            await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            sent_msg = await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         except TelegramBadRequest as e:
             logger.warning("Failed to send Must-Join message with HTML: %s. Falling back to default format.", e)
-            await message.answer(text, reply_markup=kb)
+            try:
+                sent_msg = await message.answer(text, reply_markup=kb)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("Failed to send Must-Join message: %s", e)
+
+        if sent_msg:
+            try:
+                r = get_redis_client()
+                await r.set(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}", f"{sent_msg.chat.id}:{sent_msg.message_id}", ex=86400)
+            except Exception as e:
+                logger.debug("Failed saving must-join prompt message id: %s", e)
 
         return False
 
@@ -709,9 +728,19 @@ class MustJoinService:
         if callback.message:
             first_name = callback.from_user.first_name if callback.from_user else None
             text = await cls.get_rendered_must_join_message(session, first_name, missing_channels)
+            sent_msg = None
             try:
-                await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+                sent_msg = await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
             except Exception:
-                await callback.message.answer(text, reply_markup=kb)
+                try:
+                    sent_msg = await callback.message.answer(text, reply_markup=kb)
+                except Exception:
+                    pass
+            if sent_msg:
+                try:
+                    r = get_redis_client()
+                    await r.set(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}", f"{sent_msg.chat.id}:{sent_msg.message_id}", ex=86400)
+                except Exception as e:
+                    logger.debug("Failed saving must-join prompt message id: %s", e)
 
         return False
