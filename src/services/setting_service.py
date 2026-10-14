@@ -3,6 +3,7 @@ import json
 import os
 import re
 import socket
+import time
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -50,6 +51,10 @@ SETTING_WELCOME_MSG = "welcome_message"
 SETTING_HELP_MSG = "help_message"
 SETTING_ABOUT_MSG = "about_message"
 SETTING_UNSUPPORTED_LINK_MSG = "unsupported_link_message"
+
+# In-memory template message cache to accelerate /start, /about, and Must-Join prompts
+_template_cache: Dict[str, Tuple[float, str]] = {}
+_TEMPLATE_CACHE_TTL: float = 120.0
 
 # Application Setting Keys
 SETTING_MAX_VIDEO_FILE_SIZE_MB_LOCAL = "max_video_file_size_mb_local"
@@ -1224,8 +1229,15 @@ class SettingService:
     @classmethod
     async def get_must_join_message(cls, session: Optional[AsyncSession] = None) -> str:
         """Get the active Must-Join template message."""
+        now = time.monotonic()
+        if SETTING_MUST_JOIN_MSG in _template_cache:
+            ts, val = _template_cache[SETTING_MUST_JOIN_MSG]
+            if now - ts < _TEMPLATE_CACHE_TTL:
+                return val
         custom_msg = await cls.get_active_setting(SETTING_MUST_JOIN_MSG, session)
-        return custom_msg if custom_msg else DEFAULT_MUST_JOIN_MESSAGE
+        res = custom_msg if custom_msg else DEFAULT_MUST_JOIN_MESSAGE
+        _template_cache[SETTING_MUST_JOIN_MSG] = (now, res)
+        return res
 
     @classmethod
     async def save_must_join_message(
@@ -1265,6 +1277,7 @@ class SettingService:
                     )
                 )
             await sess.commit()
+            _template_cache[SETTING_MUST_JOIN_MSG] = (time.monotonic(), clean_msg)
             return clean_msg
         except Exception:
             await sess.rollback()
@@ -1287,6 +1300,7 @@ class SettingService:
                 delete(Setting).where(Setting.key == SETTING_MUST_JOIN_MSG, Setting.status == "ACTIVE")
             )
             await sess.commit()
+            _template_cache[SETTING_MUST_JOIN_MSG] = (time.monotonic(), DEFAULT_MUST_JOIN_MESSAGE)
             return DEFAULT_MUST_JOIN_MESSAGE
         except Exception:
             await sess.rollback()
@@ -1391,8 +1405,15 @@ class SettingService:
     @classmethod
     async def get_welcome_message(cls, session: Optional[AsyncSession] = None) -> str:
         """Get the active welcome message template for /start."""
+        now = time.monotonic()
+        if SETTING_WELCOME_MSG in _template_cache:
+            ts, val = _template_cache[SETTING_WELCOME_MSG]
+            if now - ts < _TEMPLATE_CACHE_TTL:
+                return val
         custom_msg = await cls.get_active_setting(SETTING_WELCOME_MSG, session)
-        return custom_msg if custom_msg else DEFAULT_WELCOME_MESSAGE
+        res = custom_msg if custom_msg else DEFAULT_WELCOME_MESSAGE
+        _template_cache[SETTING_WELCOME_MSG] = (now, res)
+        return res
 
     @classmethod
     async def save_welcome_message(
@@ -1429,6 +1450,7 @@ class SettingService:
                     )
                 )
             await sess.commit()
+            _template_cache[SETTING_WELCOME_MSG] = (time.monotonic(), clean_msg)
             return clean_msg
         except Exception:
             await sess.rollback()
@@ -1451,6 +1473,7 @@ class SettingService:
                 delete(Setting).where(Setting.key == SETTING_WELCOME_MSG, Setting.status == "ACTIVE")
             )
             await sess.commit()
+            _template_cache[SETTING_WELCOME_MSG] = (time.monotonic(), DEFAULT_WELCOME_MESSAGE)
             return DEFAULT_WELCOME_MESSAGE
         except Exception:
             await sess.rollback()
@@ -1462,10 +1485,17 @@ class SettingService:
     @classmethod
     async def get_about_message(cls, session: Optional[AsyncSession] = None) -> str:
         """Get the active about message template for /about (and /help)."""
+        now = time.monotonic()
+        if SETTING_ABOUT_MSG in _template_cache:
+            ts, val = _template_cache[SETTING_ABOUT_MSG]
+            if now - ts < _TEMPLATE_CACHE_TTL:
+                return val
         custom_msg = await cls.get_active_setting(SETTING_ABOUT_MSG, session)
         if not custom_msg:
             custom_msg = await cls.get_active_setting(SETTING_HELP_MSG, session)
-        return custom_msg if custom_msg else DEFAULT_ABOUT_MESSAGE
+        res = custom_msg if custom_msg else DEFAULT_ABOUT_MESSAGE
+        _template_cache[SETTING_ABOUT_MSG] = (now, res)
+        return res
 
     @classmethod
     async def get_help_message(cls, session: Optional[AsyncSession] = None) -> str:
@@ -1511,6 +1541,7 @@ class SettingService:
                     )
                 )
             await sess.commit()
+            _template_cache[SETTING_ABOUT_MSG] = (time.monotonic(), clean_msg)
             return clean_msg
         except Exception:
             await sess.rollback()
@@ -1545,6 +1576,7 @@ class SettingService:
                 )
             )
             await sess.commit()
+            _template_cache[SETTING_ABOUT_MSG] = (time.monotonic(), DEFAULT_ABOUT_MESSAGE)
             return DEFAULT_ABOUT_MESSAGE
         except Exception:
             await sess.rollback()

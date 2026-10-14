@@ -273,7 +273,7 @@ def get_canonical_url(source_id: str) -> str:
 
 
 _metadata_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-_METADATA_CACHE_TTL: float = 300.0  # 5 minutes
+_METADATA_CACHE_TTL: float = 1800.0  # 30 minutes
 
 
 class YtDlpService:
@@ -401,7 +401,7 @@ class YtDlpService:
                 r = get_redis_client()
                 redis_key = f"{REDIS_KEY_METADATA_PREFIX}{source_id}"
 
-                serialized = json.dumps(info)
+                serialized = json.dumps(info, default=str)
                 if len(serialized) > 512 * 1024:
                     # Prune verbose format dump to essential fields to protect VPS RAM
                     pruned_info = dict(info)
@@ -414,10 +414,10 @@ class YtDlpService:
                             {k: f.get(k) for k in essential_fields if k in f}
                             for f in pruned_info["formats"]
                         ]
-                    serialized = json.dumps(pruned_info)
+                    serialized = json.dumps(pruned_info, default=str)
 
                 if len(serialized) <= 512 * 1024:
-                    await r.set(redis_key, serialized, ex=300)
+                    await r.set(redis_key, serialized, ex=1800)
                     logger.debug("Stored metadata in L2 Redis cache for %s (%d bytes)", source_id, len(serialized))
                 else:
                     logger.debug("Pruned metadata for %s still exceeds 512 KB (%d bytes), skipping Redis cache", source_id, len(serialized))

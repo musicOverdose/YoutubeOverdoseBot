@@ -1,3 +1,4 @@
+import asyncio
 import html
 from datetime import datetime, timezone
 from typing import Optional
@@ -16,6 +17,15 @@ from src.services.setting_service import DEFAULT_ABOUT_MESSAGE, DEFAULT_HELP_MES
 
 logger = setup_logger("bot_base")
 base_router = Router()
+
+
+async def _persist_user_background(msg_user) -> None:
+    """Persists or updates user record in PostgreSQL asynchronously without delaying user response."""
+    try:
+        async with AsyncSessionLocal() as session:
+            await get_or_create_user(session, msg_user)
+    except Exception as e:
+        logger.debug("Background user persistence failed: %s", e)
 
 
 async def get_or_create_user(session: AsyncSession, msg_user) -> User:
@@ -49,20 +59,12 @@ async def cmd_start(message: Message, bot: Optional[Bot] = None):
 
     active_bot = bot or getattr(message, "bot", None)
 
+    # Fire non-blocking background user persistence
+    if message.from_user:
+        asyncio.create_task(_persist_user_background(message.from_user))
+
     try:
         async with AsyncSessionLocal() as session:
-            if message.from_user:
-                try:
-                    await get_or_create_user(session, message.from_user)
-                except Exception as e:
-                    logger.warning(
-                        "Auxiliary user persistence in /start failed: %s. Proceeding with welcome message.", e
-                    )
-                    try:
-                        await session.rollback()
-                    except Exception:
-                        pass
-
             # Centralized Must-Join Gate for /start
             if active_bot is not None:
                 allowed = await MustJoinService.enforce_must_join_message(message, active_bot, session)

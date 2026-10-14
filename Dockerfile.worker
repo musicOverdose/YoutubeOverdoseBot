@@ -6,12 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TEMP_DIR=/tmp/ytdl
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg curl unzip ca-certificates procps \
+    ffmpeg curl unzip ca-certificates procps nodejs \
     && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL https://deno.land/install.sh | sh -s -- -y \
-    && mv /root/.deno/bin/deno /usr/local/bin/deno \
-    && rm -rf /root/.deno
 
 WORKDIR /app
 COPY requirements.txt .

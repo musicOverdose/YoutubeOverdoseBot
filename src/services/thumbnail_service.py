@@ -60,7 +60,7 @@ class ThumbnailService:
         4. JPEG format preference (Telegram native compatibility).
         5. yt-dlp preference score.
         """
-        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int, int, int]:
+        def _thumb_score(t: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
             url = str(t.get("url") or "")
             w = t.get("width") or 0
             h = t.get("height") or 0
@@ -86,10 +86,11 @@ class ThumbnailService:
 
             res_tier = cls._get_res_tier(area)
             has_token = 1 if ("sqp=" in url or "rs=" in url) else 0
+            is_meta = t.get("is_from_metadata", 0 if str(t.get("id", "")).startswith("det_") else 1)
             is_jpeg = 1 if (".jpg" in url_lower or ".jpeg" in url_lower) else 0
             pref = t.get("preference") if t.get("preference") is not None else 0
 
-            return (res_tier, has_token, area, is_jpeg, pref)
+            return (is_meta, res_tier, has_token, area, is_jpeg, pref)
 
         return sorted(candidates, key=_thumb_score, reverse=True)
 
@@ -139,28 +140,35 @@ class ThumbnailService:
             source_id = info.get("id")
 
         candidates: List[Dict[str, Any]] = []
+        has_hd_verified = False
 
         # 1. Authoritative, live thumbnail URLs from yt-dlp metadata
         if info:
             thumbnails = info.get("thumbnails")
             if thumbnails and isinstance(thumbnails, list):
-                candidates.extend([t for t in thumbnails if isinstance(t, dict) and t.get("url")])
+                for t in thumbnails:
+                    if isinstance(t, dict) and t.get("url"):
+                        cand = dict(t)
+                        cand["is_verified"] = 1
+                        cand["is_from_metadata"] = 1
+                        w = cand.get("width") or 0
+                        h = cand.get("height") or 0
+                        u = str(cand.get("url") or "")
+                        if w >= 1280 or h >= 720 or "maxres" in u or "hq720" in u:
+                            has_hd_verified = True
+                        candidates.append(cand)
 
             main_thumb = info.get("thumbnail")
             if main_thumb and not any(t.get("url") == main_thumb for t in candidates):
-                candidates.append({"url": main_thumb, "id": "main_thumb"})
+                candidates.append({"url": main_thumb, "id": "main_thumb", "is_verified": 1, "is_from_metadata": 1})
 
-        # 2. Inject deterministic high-resolution endpoints
+        # 2. Inject deterministic JPEG endpoints as low-priority fallback (strictly behind live metadata URLs)
         if source_id and len(source_id) == 11:
             deterministic_candidates = [
-                {"url": f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg", "id": "det_maxres_jpg", "width": 1920, "height": 1080, "preference": -1},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/maxresdefault.webp", "id": "det_maxres_webp", "width": 1920, "height": 1080, "preference": -1},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/hq720.jpg", "id": "det_hq720_jpg", "width": 1280, "height": 720, "preference": -2},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/hq720.webp", "id": "det_hq720_webp", "width": 1280, "height": 720, "preference": -2},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg", "id": "det_sddefault_jpg", "width": 640, "height": 480, "preference": -3},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/sddefault.webp", "id": "det_sddefault_webp", "width": 640, "height": 480, "preference": -3},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/hqdefault.jpg", "id": "det_hqdefault_jpg", "width": 480, "height": 360, "preference": -4},
-                {"url": f"https://i.ytimg.com/vi/{source_id}/hqdefault.webp", "id": "det_hqdefault_webp", "width": 480, "height": 360, "preference": -4},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/maxresdefault.jpg", "id": "det_maxres_jpg", "width": 1920, "height": 1080, "preference": -10, "is_verified": 0, "is_from_metadata": 0},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hq720.jpg", "id": "det_hq720_jpg", "width": 1280, "height": 720, "preference": -20, "is_verified": 0, "is_from_metadata": 0},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/sddefault.jpg", "id": "det_sddefault_jpg", "width": 640, "height": 480, "preference": -30, "is_verified": 0, "is_from_metadata": 0},
+                {"url": f"https://i.ytimg.com/vi/{source_id}/hqdefault.jpg", "id": "det_hqdefault_jpg", "width": 480, "height": 360, "preference": -40, "is_verified": 0, "is_from_metadata": 0},
             ]
             for dc in deterministic_candidates:
                 if not any(t.get("url") == dc["url"] for t in candidates):
@@ -788,9 +796,12 @@ class ThumbnailService:
                     with open(output_path, "wb") as f:
                         f.write(resp.content)
                     return True
-                logger.warning(
-                    "Failed to download thumbnail from %s: status %d", url, resp.status_code
-                )
+                if resp.status_code == 404:
+                    logger.debug("Candidate thumbnail not found (404): %s", url)
+                else:
+                    logger.warning(
+                        "Failed to download thumbnail from %s: status %d", url, resp.status_code
+                    )
                 return False
 
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as new_client:
@@ -799,9 +810,12 @@ class ThumbnailService:
                     with open(output_path, "wb") as f:
                         f.write(resp.content)
                     return True
-                logger.warning(
-                    "Failed to download thumbnail from %s: status %d", url, resp.status_code
-                )
+                if resp.status_code == 404:
+                    logger.debug("Candidate thumbnail not found (404): %s", url)
+                else:
+                    logger.warning(
+                        "Failed to download thumbnail from %s: status %d", url, resp.status_code
+                    )
                 return False
         except Exception as e:
             logger.warning("HTTP error downloading thumbnail from %s: %s", url, e)

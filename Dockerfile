@@ -10,20 +10,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     TEMP_DIR=/tmp/ytdl
 
-# Install runtime system dependencies: FFmpeg, curl, unzip, ca-certificates
+# Install runtime system dependencies: FFmpeg, curl, unzip, ca-certificates, procps, and NodeJS (lightweight JS runtime for yt-dlp challenges)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     unzip \
     ca-certificates \
     procps \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Deno JS Runtime (recommended modern engine for yt-dlp challenges)
-RUN curl -fsSL https://deno.land/install.sh | sh -s -- -y \
-    && mv /root/.deno/bin/deno /usr/local/bin/deno \
-    && rm -rf /root/.deno \
-    && deno --version
+    nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version
 
 WORKDIR /app
 

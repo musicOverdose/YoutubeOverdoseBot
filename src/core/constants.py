@@ -90,5 +90,7 @@ REDIS_KEY_SUBTITLE_CACHE_PREFIX = "ytdl:subs:en:"
 REDIS_KEY_SUBTITLE_FA_CACHE_PREFIX = "ytdl:subs:fa:"
 
 # Default Timeouts and Settings
-MEMBERSHIP_CACHE_TTL = 60  # seconds (non-authoritative UI cache only)
-CACHE_LOCK_TTL = 3600      # 1 hour duplicate lock
+MEMBERSHIP_CACHE_TTL = 1800             # 30 minutes (backward compatible default)
+MEMBERSHIP_CACHE_TTL_MEMBER = 1800      # 30 minutes for confirmed channel members
+MEMBERSHIP_CACHE_TTL_NON_MEMBER = 15    # 15 seconds for unverified users
+CACHE_LOCK_TTL = 3600                   # 1 hour duplicate lock

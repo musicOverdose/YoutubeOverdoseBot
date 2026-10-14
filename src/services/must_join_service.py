@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.bot.keyboards import build_must_join_keyboard
 from src.core.config import settings
-from src.core.constants import MEMBERSHIP_CACHE_TTL, REDIS_KEY_MEMBERSHIP_PREFIX
+from src.core.constants import (
+    MEMBERSHIP_CACHE_TTL,
+    MEMBERSHIP_CACHE_TTL_MEMBER,
+    MEMBERSHIP_CACHE_TTL_NON_MEMBER,
+    REDIS_KEY_MEMBERSHIP_PREFIX,
+)
 from src.core.logger import setup_logger
 from src.core.redis import get_redis_client
 from src.models.channel import RequiredChannel
@@ -199,7 +204,8 @@ class MustJoinService:
             try:
                 r = get_redis_client()
                 cache_key = f"{REDIS_KEY_MEMBERSHIP_PREFIX}{ch.chat_id}:{user_id}"
-                await r.set(cache_key, "1" if is_member else "0", ex=MEMBERSHIP_CACHE_TTL)
+                ttl = MEMBERSHIP_CACHE_TTL_MEMBER if is_member else MEMBERSHIP_CACHE_TTL_NON_MEMBER
+                await r.set(cache_key, "1" if is_member else "0", ex=ttl)
             except Exception as e:
                 logger.warning("Redis error saving membership cache: %s", e)
 
