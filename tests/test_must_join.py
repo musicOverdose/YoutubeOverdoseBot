@@ -875,7 +875,7 @@ async def test_auto_unblock_on_chat_member_joined_deletes_prompt_and_sends_welco
         AsyncMock(return_value=(True, [])),
     )
 
-    unblocked = await check_and_auto_unblock_user(bot, user_id)
+    unblocked = await check_and_auto_unblock_user(bot, user_id, first_name="Farzad")
     assert unblocked is True
 
     # Verified bot.delete_message was called with prompt msg id
@@ -884,8 +884,11 @@ async def test_auto_unblock_on_chat_member_joined_deletes_prompt_and_sends_welco
     # Prompt was deleted from Redis
     assert await mock_r.get(f"{REDIS_KEY_MUST_JOIN_MSG_PREFIX}{user_id}") is None
 
-    # Welcome message was sent
+    # Welcome message was sent and {first_name} was replaced with Farzad
     assert bot.send_message.called
+    sent_text = bot.send_message.call_args.kwargs["text"]
+    assert "{first_name}" not in sent_text
+    assert "Farzad" in sent_text
 
 
 @pytest.mark.asyncio

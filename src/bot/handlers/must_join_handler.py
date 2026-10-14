@@ -13,6 +13,7 @@ from src.core.redis import get_redis_client
 from src.models.cache import CacheEntry
 from src.models.job import Job
 from src.models.job_request import JobRequest
+from src.models.user import User
 from src.services.cache_service import CacheService
 from src.services.must_join_service import MustJoinService
 from src.services.setting_service import SettingService
@@ -27,6 +28,7 @@ async def check_and_auto_unblock_user(
     username: Optional[str] = None,
     explicit_chat_id: Optional[int] = None,
     force_authoritative: bool = False,
+    first_name: Optional[str] = None,
 ) -> bool:
     """
     Checks if a user has satisfied all required channels, and if so:
@@ -117,7 +119,16 @@ async def check_and_auto_unblock_user(
                     await process_youtube_url(bot, target_chat_id, url, source_id, user_id=user_id)
                     return True
             elif action_type == "start":
-                welcome_text = await SettingService.get_welcome_message()
+                # Resolve user's first name for templates
+                resolved_name = first_name
+                if not resolved_name:
+                    user_obj = await session.get(User, user_id)
+                    if user_obj and user_obj.first_name:
+                        resolved_name = user_obj.first_name
+                safe_name = html.escape(resolved_name) if resolved_name else "there"
+
+                welcome_template = await SettingService.get_welcome_message(session)
+                welcome_text = welcome_template.replace("{first_name}", safe_name)
                 try:
                     await bot.send_message(
                         chat_id=target_chat_id,
@@ -132,7 +143,16 @@ async def check_and_auto_unblock_user(
                 return True
 
         if not had_pending_delivery:
-            welcome_text = await SettingService.get_welcome_message()
+            # Resolve user's first name for templates
+            resolved_name = first_name
+            if not resolved_name:
+                user_obj = await session.get(User, user_id)
+                if user_obj and user_obj.first_name:
+                    resolved_name = user_obj.first_name
+            safe_name = html.escape(resolved_name) if resolved_name else "there"
+
+            welcome_template = await SettingService.get_welcome_message(session)
+            welcome_text = welcome_template.replace("{first_name}", safe_name)
             try:
                 await bot.send_message(
                     chat_id=target_chat_id,
@@ -142,7 +162,7 @@ async def check_and_auto_unblock_user(
             except Exception:
                 await bot.send_message(
                     chat_id=target_chat_id,
-                    text="🎉 You are verified! Send any YouTube link to start downloading.",
+                    text=f"🎉 You are verified!\n\n{welcome_text}",
                 )
 
         return True
@@ -161,7 +181,12 @@ async def on_channel_chat_member_updated(
         user = event.new_chat_member.user if event.new_chat_member else None
         if user and not user.is_bot:
             logger.info("Triggering auto-unblock check for user %d...", user.id)
-            await check_and_auto_unblock_user(bot, user.id, username=user.username)
+            await check_and_auto_unblock_user(
+                bot,
+                user.id,
+                username=user.username,
+                first_name=user.first_name,
+            )
 
 
 @must_join_router.my_chat_member()
@@ -191,10 +216,16 @@ async def on_no_url_clicked(callback: CallbackQuery):
 async def on_must_join_check_again(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
     username = callback.from_user.username if callback.from_user else None
+    first_name = callback.from_user.first_name if callback.from_user else None
     chat_id = callback.message.chat.id if callback.message else user_id
 
     unblocked = await check_and_auto_unblock_user(
-        bot, user_id, username=username, explicit_chat_id=chat_id, force_authoritative=True
+        bot,
+        user_id,
+        username=username,
+        explicit_chat_id=chat_id,
+        force_authoritative=True,
+        first_name=first_name,
     )
     if not unblocked:
         async with AsyncSessionLocal() as session:
