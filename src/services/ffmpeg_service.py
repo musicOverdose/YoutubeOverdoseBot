@@ -204,20 +204,36 @@ class FFmpegService:
             color_transfer = v_stream.get("color_transfer")
             color_primaries = v_stream.get("color_primaries")
 
-            scale_filters = [f"scale={width}:{height}:flags=lanczos+accurate_rnd"]
+            # Determine exact sample aspect ratio (SAR) from native video stream
+            target_sar = v_stream.get("sample_aspect_ratio")
+            if not target_sar or target_sar in ("0:1", "0/1", "1:0", "1/0"):
+                target_sar = "1/1"
+            target_sar = target_sar.replace(":", "/")
+
+            # Build proper filterchain: scale (with colon-separated options) -> crop -> setsar
+            scale_params = [
+                f"{width}:{height}",
+                "force_original_aspect_ratio=increase",
+                "flags=lanczos+accurate_rnd",
+            ]
             # Ensure full-range RGB input from still image is accurately converted
             # to the target stream's color matrix and color range
             if color_range == "tv" or not color_range:
-                scale_filters.append("in_range=full:out_range=tv")
+                scale_params.append("in_range=full:out_range=tv")
             elif color_range == "pc":
-                scale_filters.append("in_range=full:out_range=full")
+                scale_params.append("in_range=full:out_range=full")
 
             if color_space:
-                scale_filters.append(f"out_color_matrix={color_space}")
+                scale_params.append(f"out_color_matrix={color_space}")
             elif height >= 720:
-                scale_filters.append("out_color_matrix=bt709")
+                scale_params.append("out_color_matrix=bt709")
 
-            cmd_intro.extend(["-vf", ":".join(scale_filters)])
+            scale_filter = "scale=" + ":".join(scale_params)
+            crop_filter = f"crop={width}:{height}"
+            sar_filter = f"setsar={target_sar}"
+
+            vf_chain = f"{scale_filter},{crop_filter},{sar_filter}"
+            cmd_intro.extend(["-vf", vf_chain])
 
             if color_range:
                 cmd_intro.extend(["-color_range", color_range])
@@ -241,7 +257,7 @@ class FFmpegService:
 
             if encoder == "libx264":
                 cmd_intro.extend(["-tune", "stillimage"])
-                x264_params = []
+                x264_params = [f"sar={target_sar}"]
                 target_prim = color_primaries or ("bt709" if height >= 720 else None)
                 target_trc = color_transfer or ("bt709" if height >= 720 else None)
                 target_matrix = color_space or ("bt709" if height >= 720 else None)
@@ -253,6 +269,18 @@ class FFmpegService:
                     x264_params.append(f"colormatrix={target_matrix}")
                 if x264_params:
                     cmd_intro.extend(["-x264-params", ":".join(x264_params)])
+            elif encoder == "libx265":
+                x265_params = [f"sar={target_sar}"]
+                target_prim = color_primaries or ("bt709" if height >= 720 else None)
+                target_trc = color_transfer or ("bt709" if height >= 720 else None)
+                target_matrix = color_space or ("bt709" if height >= 720 else None)
+                if target_prim:
+                    x265_params.append(f"colorprim={target_prim}")
+                if target_trc:
+                    x265_params.append(f"transfer={target_trc}")
+                if target_matrix:
+                    x265_params.append(f"colormatrix={target_matrix}")
+                cmd_intro.extend(["-tag:v", "hvc1", "-x265-params", ":".join(x265_params)])
 
             cmd_intro.append(intro_file)
 

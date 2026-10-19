@@ -676,6 +676,49 @@ async def test_prepend_thumbnail_intro_zero_reencode(tmp_path):
         assert b > 200 and r < 50 and g < 50
 
 
+@pytest.mark.asyncio
+async def test_prepend_thumbnail_intro_preserves_aspect_ratio_with_mismatched_thumbnail(tmp_path):
+    """
+    Verifies that when a 16:9 widescreen video has a 4:3 (or non-16:9) thumbnail,
+    prepend_thumbnail_intro preserves the native video's SAR (1:1) and DAR (16:9),
+    preventing vertical stretching bugs on Android (ExoPlayer).
+    """
+    vid_in = str(tmp_path / "main_16_9.mp4")
+    thumb_in = str(tmp_path / "thumb_4_3.jpg")
+    vid_out = str(tmp_path / "out_16_9.mp4")
+
+    # Generate 1s 16:9 test video (640x360)
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+        "-t", "1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        vid_in
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 4:3 thumbnail (640x480)
+    Image.new("RGB", (640, 480), color=(255, 0, 0)).save(thumb_in, "JPEG")
+
+    ok = await FFmpegService.prepend_thumbnail_intro(
+        video_path=vid_in,
+        output_path=vid_out,
+        thumbnail_image_path=thumb_in,
+        cover_image_path=thumb_in,
+        duration_sec=0.06,
+    )
+    assert ok is True
+
+    # Probe final output and verify DAR is strictly 16:9, not corrupted to 4:3
+    probe = await FFmpegService.probe_file(vid_out)
+    v_stream = next(s for s in probe.get("streams", []) if s.get("codec_type") == "video")
+    assert v_stream.get("width") == 640
+    assert v_stream.get("height") == 360
+    assert v_stream.get("sample_aspect_ratio") in ("1:1", "1/1")
+    assert v_stream.get("display_aspect_ratio") == "16:9"
+
+
 def test_tokenized_thumbnails_beat_bare_urls_with_higher_preference():
     """
     Verifies that when yt-dlp assigns arbitrary higher preference to bare URLs
