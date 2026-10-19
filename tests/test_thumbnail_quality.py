@@ -557,6 +557,52 @@ def test_create_telegram_chat_thumbnail_vertical_shorts(tmp_path):
         assert img.width < img.height
 
 
+def test_create_telegram_chat_thumbnail_crops_to_target_aspect_ratio_landscape(tmp_path):
+    """
+    Verifies that when a 4:3 or 3:2 creator thumbnail (e.g. 640x480 / 640x427) is supplied
+    for a 16:9 widescreen video with target_ratio=16/9, create_telegram_chat_thumbnail
+    center-crops the thumbnail so that its aspect ratio matches 16:9 exactly (320x180),
+    preventing Telegram from stretching the thumbnail in the chat bubble prior to playback.
+    """
+    src_img = tmp_path / "thumb_640x427.jpg"
+    out_320 = str(tmp_path / "tg_thumb_16_9.jpg")
+    Image.new("RGB", (640, 427), color=(200, 100, 50)).save(str(src_img), "JPEG")
+
+    ok = ThumbnailService.create_telegram_chat_thumbnail(
+        source_image_path=str(src_img),
+        output_thumb_path=out_320,
+        is_vertical=False,
+        target_ratio=16.0 / 9.0,
+    )
+    assert ok is True
+    assert os.path.exists(out_320)
+    with Image.open(out_320) as img:
+        assert img.format == "JPEG"
+        assert img.size == (320, 180)
+        assert abs((img.width / float(img.height)) - (16.0 / 9.0)) < 0.01
+
+
+def test_crop_to_aspect_ratio_exact_dimensions():
+    """
+    Verifies ThumbnailService.crop_to_aspect_ratio center-crops both wider and taller
+    images to arbitrary aspect ratios.
+    """
+    # Taller image (640x427) cropped to 16:9 widescreen
+    img_tall = Image.new("RGB", (640, 427))
+    cropped_widescreen = ThumbnailService.crop_to_aspect_ratio(img_tall, 16.0 / 9.0)
+    assert cropped_widescreen.size == (640, 360)
+
+    # Wider image (1920x1080) cropped to 4:3
+    img_wide = Image.new("RGB", (1920, 1080))
+    cropped_43 = ThumbnailService.crop_to_aspect_ratio(img_wide, 4.0 / 3.0)
+    assert cropped_43.size == (1440, 1080)
+
+    # Square image (500x500) cropped to 9:16 vertical
+    img_sq = Image.new("RGB", (500, 500))
+    cropped_vert = ThumbnailService.crop_to_aspect_ratio(img_sq, 9.0 / 16.0)
+    assert cropped_vert.size == (281, 500)
+
+
 def test_candidate_urls_prioritize_live_tokens_over_deterministic_bare_urls():
     """
     Verifies that get_candidate_thumbnail_urls prioritizes live, tokenized URLs

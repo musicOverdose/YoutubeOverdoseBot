@@ -521,8 +521,7 @@ class JobProcessor:
                             _dur, early_w, early_h = await FFmpegService.extract_video_metadata(input_file)
                             if early_w > 0 and early_h > 0:
                                 is_vertical = (early_h > early_w)
-                                if is_vertical:
-                                    target_ratio = early_w / float(early_h)
+                                target_ratio = early_w / float(early_h)
                         except Exception as probe_err:
                             logger.debug("Could not probe input_file early for orientation: %s", probe_err)
                             if "/shorts/" in (job.canonical_url or "").lower():
@@ -635,7 +634,7 @@ class JobProcessor:
                     if not is_clip:
                         thumb_path = os.path.join(job_dir, "thumbnail.jpg")
                         thumb_ok = False
-                        target_ratio = (width / float(height)) if is_vertical and height > 0 else None
+                        target_ratio = (width / float(height)) if (width > 0 and height > 0) else None
 
                         if cover_downloaded and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                             thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(

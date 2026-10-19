@@ -291,6 +291,33 @@ class ThumbnailService:
         return cropped
 
     @classmethod
+    def crop_to_aspect_ratio(cls, img: Image.Image, target_ratio: float) -> Image.Image:
+        """
+        Center-crops an image so its aspect ratio matches target_ratio with high precision,
+        eliminating letterbox/pillarbox distortions in Telegram chat bubbles and matching
+        the exact framing of the video frame.
+        """
+        w, h = img.size
+        if w <= 0 or h <= 0 or target_ratio <= 0:
+            return img
+
+        current_ratio = w / float(h)
+        # If already matching target within 0.5% tolerance, return unchanged
+        if abs(current_ratio - target_ratio) / target_ratio < 0.005:
+            return img
+
+        if current_ratio > target_ratio:
+            # Image is wider than target ratio -> crop left & right margins
+            new_w = max(1, int(round(h * target_ratio)))
+            offset_x = max(0, (w - new_w) // 2)
+            return img.crop((offset_x, 0, offset_x + new_w, h))
+        else:
+            # Image is taller than target ratio -> crop top & bottom margins
+            new_h = max(1, int(round(w / target_ratio)))
+            offset_y = max(0, (h - new_h) // 2)
+            return img.crop((0, offset_y, w, offset_y + new_h))
+
+    @classmethod
     def auto_crop_black_borders(
         cls,
         img: Image.Image,
@@ -519,6 +546,9 @@ class ThumbnailService:
 
                 img = cls.auto_crop_black_borders(img)
 
+                if target_ratio is not None and target_ratio > 0:
+                    img = cls.crop_to_aspect_ratio(img, target_ratio)
+
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
                     src_w, src_h, cls.MAX_DIMENSION, cls.MAX_DIMENSION
@@ -566,6 +596,9 @@ class ThumbnailService:
                     img = cls.crop_vertical_pillarbox(img, target_ratio=ratio)
 
                 img = cls.auto_crop_black_borders(img)
+
+                if target_ratio is not None and target_ratio > 0:
+                    img = cls.crop_to_aspect_ratio(img, target_ratio)
 
                 src_w, src_h = img.size
                 target_w, target_h = cls.fit_dimensions_inside_bounds(
