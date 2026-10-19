@@ -68,3 +68,71 @@ def test_exact_quality_format_spec():
     assert "height=1080" in spec_1080_h265
     assert "vcodec~='(?i)^(hev1|hvc1|hevc|h265)'" in spec_1080_h265
 
+
+def test_ytdlp_player_client_configuration(monkeypatch):
+    """
+    1. The common options include both 'default' and 'android' in the YouTube player_client setting.
+    2. A missing YTDLP_PO_TOKEN does not create a malformed token argument.
+    """
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "YTDLP_PO_TOKEN", None)
+    opts = YtDlpService.get_common_base_opts()
+
+    extractor_args = opts.get("extractor_args", {})
+    assert "youtube" in extractor_args
+    youtube_args = extractor_args["youtube"]
+
+    # Verify default,android is in player_client
+    assert any("player_client=default,android" in arg for arg in youtube_args)
+    # Verify no po_token is present when YTDLP_PO_TOKEN is None/empty
+    assert not any("po_token" in arg for arg in youtube_args)
+
+
+def test_ytdlp_po_token_formats_and_integrity(monkeypatch):
+    """
+    Verifies that:
+    1. A configured raw token is safely prefixed with web+ without corrupting player_client.
+    2. A configured token already prefixed with web+ does not become web+web+.
+    3. Empty or whitespace-only token does not inject a po_token argument.
+    """
+    from src.core.config import settings
+
+    # Case 1: Raw token
+    monkeypatch.setattr(settings, "YTDLP_PO_TOKEN", "raw_token_xyz")
+    opts1 = YtDlpService.get_common_base_opts()
+    args1 = opts1["extractor_args"]["youtube"]
+    assert any("player_client=default,android" in a for a in args1)
+    assert any("po_token=web+raw_token_xyz" in a for a in args1)
+
+    # Case 2: Already prefixed token
+    monkeypatch.setattr(settings, "YTDLP_PO_TOKEN", "web+prefixed_token_abc")
+    opts2 = YtDlpService.get_common_base_opts()
+    args2 = opts2["extractor_args"]["youtube"]
+    assert any("player_client=default,android" in a for a in args2)
+    assert any("po_token=web+prefixed_token_abc" in a for a in args2)
+    assert not any("po_token=web+web+" in a for a in args2)
+
+    # Case 3: Whitespace only
+    monkeypatch.setattr(settings, "YTDLP_PO_TOKEN", "   ")
+    opts3 = YtDlpService.get_common_base_opts()
+    args3 = opts3["extractor_args"]["youtube"]
+    assert any("player_client=default,android" in a for a in args3)
+    assert not any("po_token" in a for a in args3)
+
+
+def test_ytdlp_opts_construction_consistency():
+    """
+    Verifies that extractor_args with player_client=default,android are consistently
+    present in both get_metadata_opts and get_download_opts.
+    """
+    meta_opts = YtDlpService.get_metadata_opts()
+    assert "extractor_args" in meta_opts
+    assert any("player_client=default,android" in a for a in meta_opts["extractor_args"]["youtube"])
+    assert meta_opts.get("retries") == 2
+
+    dl_opts = YtDlpService.get_download_opts()
+    assert "extractor_args" in dl_opts
+    assert any("player_client=default,android" in a for a in dl_opts["extractor_args"]["youtube"])
+    assert dl_opts.get("concurrent_fragments") == 16
+

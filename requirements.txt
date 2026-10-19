@@ -21,8 +21,8 @@ python-jose[cryptography]>=3.3.0
 python-multipart>=0.0.20
 
 # Media & YouTube
-yt-dlp>=2025.01.26
-yt-dlp-ejs>=0.3.0
+yt-dlp[default]>=2025.01.26
+yt-dlp-ejs>=0.8.0
 mutagen>=1.47.0
 pillow>=10.0.0
 

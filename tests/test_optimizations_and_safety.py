@@ -12,7 +12,8 @@ from src.models.channel import RequiredChannel
 def test_ytdlp_base_opts_performance_and_reliability():
     """
     Verifies that get_download_opts sets optimal throughput flags:
-    concurrent_fragments=16, buffersize=4MB, trim_file_name=220, retries=10.
+    concurrent_fragments=16, buffersize=4MB, trim_file_name=220, retries=10,
+    and includes player_client=default,android in extractor_args.
     """
     opts = YtDlpService.get_download_opts()
     assert opts.get("concurrent_fragments") == 16
@@ -22,17 +23,23 @@ def test_ytdlp_base_opts_performance_and_reliability():
     assert opts.get("fragment_retries") == 10
     assert opts.get("skip_unavailable_fragments") is True
     assert "retry_sleep_functions" in opts
+    assert "extractor_args" in opts
+    assert "youtube" in opts["extractor_args"]
+    assert any("player_client=default,android" in arg for arg in opts["extractor_args"]["youtube"])
 
 
 def test_ytdlp_po_token_injection(monkeypatch):
     """
-    Verifies that PO-token is automatically injected into extractor_args when configured.
+    Verifies that PO-token is automatically injected into extractor_args when configured
+    without removing or corrupting player_client.
     """
     monkeypatch.setattr(settings, "YTDLP_PO_TOKEN", "test_po_token_12345")
     opts = YtDlpService.get_base_opts()
     extractor_args = opts.get("extractor_args", {})
     assert "youtube" in extractor_args
-    assert any("po_token=web+test_po_token_12345" in arg for arg in extractor_args["youtube"])
+    youtube_args = extractor_args["youtube"]
+    assert any("player_client=default,android" in arg for arg in youtube_args)
+    assert any("po_token=web+test_po_token_12345" in arg for arg in youtube_args)
 
 
 @pytest.mark.asyncio

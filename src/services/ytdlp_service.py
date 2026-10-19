@@ -297,12 +297,40 @@ class YtDlpService:
         if settings.YTDLP_PROXY:
             opts["proxy"] = settings.YTDLP_PROXY
 
+        # Configure YouTube extractor_args:
+        # Default player clients to ["default", "android"] to enable full format discovery (up to 4K/60fps)
+        # on standard videos while providing automated fallback to android for videos that are
+        # UNPLAYABLE on visionos/web (such as YouTube Kids categorized videos).
+        youtube_args: List[str] = ["player_client=default,android"]
         if getattr(settings, "YTDLP_PO_TOKEN", None):
             po = str(settings.YTDLP_PO_TOKEN).strip()
             if po:
-                opts["extractor_args"] = {
-                    "youtube": ["player-client=web,default", f"po_token=web+{po}"]
-                }
+                po_arg = po if "+" in po else f"web+{po}"
+                youtube_args.append(f"po_token={po_arg}")
+
+        if "extractor_args" not in opts:
+            opts["extractor_args"] = {}
+        if "youtube" not in opts["extractor_args"]:
+            opts["extractor_args"]["youtube"] = youtube_args
+        else:
+            existing = opts["extractor_args"]["youtube"]
+            if isinstance(existing, list):
+                has_player_client = any(arg.startswith(("player_client=", "player-client=")) for arg in existing)
+                if not has_player_client:
+                    existing.insert(0, "player_client=default,android")
+                if getattr(settings, "YTDLP_PO_TOKEN", None):
+                    po = str(settings.YTDLP_PO_TOKEN).strip()
+                    if po and not any(arg.startswith("po_token=") for arg in existing):
+                        po_arg = po if "+" in po else f"web+{po}"
+                        existing.append(f"po_token={po_arg}")
+            elif isinstance(existing, dict):
+                if "player_client" not in existing and "player-client" not in existing:
+                    existing["player_client"] = ["default", "android"]
+                if getattr(settings, "YTDLP_PO_TOKEN", None):
+                    po = str(settings.YTDLP_PO_TOKEN).strip()
+                    if po and "po_token" not in existing:
+                        po_arg = po if "+" in po else f"web+{po}"
+                        existing["po_token"] = [po_arg]
 
         return opts
 
