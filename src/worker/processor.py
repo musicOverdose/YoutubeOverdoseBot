@@ -238,6 +238,11 @@ class JobProcessor:
                     await bot.session.close()
                 return
 
+            # Capture immutable properties early so that rollback/cleanup
+            # cannot fail due to expired SQLAlchemy state
+            job_queue_type = job.queue_type
+            job_cache_key = job.cache_key
+
             req_stmt = select(JobRequest).where(JobRequest.job_id == job_id)
             req_res = await session.execute(req_stmt)
             job_requests = list(req_res.scalars().all())
@@ -257,7 +262,7 @@ class JobProcessor:
                 job.error_message = disk_err
                 await session.commit()
                 await notifier.update("❌", "Failed", disk_err, force=True)
-                await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                 await asyncio.to_thread(shutil.rmtree, job_dir, True)
                 if own_bot and bot is not None:
                     await bot.session.close()
@@ -302,7 +307,7 @@ class JobProcessor:
                         job.error_message = "Livestreams are not supported."
                         await session.commit()
                         await notifier.update("❌", "Failed", "Livestreams are not supported.", force=True)
-                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                         await asyncio.to_thread(shutil.rmtree, job_dir, True)
                         if own_bot and bot is not None:
                             await bot.session.close()
@@ -459,7 +464,7 @@ class JobProcessor:
                             await notifier.stop_ticker()
                             job.status = JobStatus.CANCELLED.value
                             await session.commit()
-                            await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                            await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                             await asyncio.to_thread(shutil.rmtree, job_dir, True)
                             if own_bot and bot is not None:
                                 await bot.session.close()
@@ -474,7 +479,7 @@ class JobProcessor:
                         await notifier.stop_ticker()
                         job.status = JobStatus.CANCELLED.value
                         await session.commit()
-                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                         await asyncio.to_thread(shutil.rmtree, job_dir, True)
                         if own_bot and bot is not None:
                             await bot.session.close()
@@ -743,7 +748,7 @@ class JobProcessor:
                         job.error_message = "Livestreams are not supported."
                         await session.commit()
                         await notifier.update("❌", "Failed", "Livestreams are not supported.", force=True)
-                        await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                        await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                         await asyncio.to_thread(shutil.rmtree, job_dir, True)
                         if own_bot and bot is not None:
                             await bot.session.close()
@@ -817,7 +822,7 @@ class JobProcessor:
                             await notifier.stop_ticker()
                             job.status = JobStatus.CANCELLED.value
                             await session.commit()
-                            await QueueService.release_active_job(job_id, queue_type=job.queue_type)
+                            await QueueService.release_active_job(job_id, queue_type=job_queue_type)
                             await asyncio.to_thread(shutil.rmtree, job_dir, True)
                             if own_bot and bot is not None:
                                 await bot.session.close()
@@ -1260,15 +1265,28 @@ class JobProcessor:
 
             except Exception as e:
                 logger.error(f"Error executing job {job_id}: {e}", exc_info=True)
-                job.status = JobStatus.FAILED.value
-                job.error_code = "PROCESSING_ERROR"
-                job.error_message = str(e)[:500]
-                await session.commit()
+                try:
+                    await session.rollback()
+                    stmt_fail = select(Job).where(Job.id == job_id)
+                    res_fail = await session.execute(stmt_fail)
+                    failed_job = res_fail.scalar_one_or_none()
+                    if failed_job:
+                        failed_job.status = JobStatus.FAILED.value
+                        failed_job.error_code = "PROCESSING_ERROR"
+                        failed_job.error_message = str(e)[:500]
+                        await session.commit()
+                except Exception as db_err:
+                    logger.error(f"Failed to record failure status for job {job_id}: {db_err}")
+
                 err_str = str(e)
-                if "too large for AI translation" in err_str:
-                    await notifier.update("⚠️", "Subtitle Too Large", err_str, force=True)
-                else:
-                    await notifier.update("❌", "Failed", f"Error: {err_str[:300]}", force=True)
+                if notifier is not None:
+                    try:
+                        if "too large for AI translation" in err_str:
+                            await notifier.update("⚠️", "Subtitle Too Large", err_str, force=True)
+                        else:
+                            await notifier.update("❌", "Failed", f"Error: {err_str[:300]}", force=True)
+                    except Exception:
+                        pass
 
             finally:
                 if notifier is not None:
@@ -1284,11 +1302,25 @@ class JobProcessor:
                         logger.debug("Error closing worker bot session: %s", e)
 
                 # GUARANTEED CLEANUP:
-                await asyncio.to_thread(shutil.rmtree, job_dir, True)
-                logger.info(f"Cleaned temp directory for job {job_id}")
+                try:
+                    await asyncio.to_thread(shutil.rmtree, job_dir, True)
+                    logger.info(f"Cleaned temp directory for job {job_id}")
+                except Exception as dir_err:
+                    logger.debug("Failed cleaning job temp dir %s: %s", job_dir, dir_err)
 
-                await QueueService.release_active_job(job_id, queue_type=job.queue_type)
-                await QueueService.release_cache_lock(job.cache_key)
+                try:
+                    await QueueService.release_active_job(job_id, queue_type=job_queue_type)
+                except Exception as rel_err:
+                    logger.error("Failed to release active job %s: %s", job_id, rel_err)
+
+                if job_cache_key:
+                    try:
+                        await QueueService.release_cache_lock(job_cache_key)
+                    except Exception as lock_err:
+                        logger.error("Failed to release cache lock for %s: %s", job_cache_key, lock_err)
 
                 # Report disk telemetry
-                await self.report_telemetry()
+                try:
+                    await self.report_telemetry()
+                except Exception:
+                    pass

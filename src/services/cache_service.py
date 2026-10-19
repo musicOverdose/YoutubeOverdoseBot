@@ -140,25 +140,47 @@ class CacheService:
         subtitle_lang: Optional[str] = None,
         file_size: Optional[int] = None,
     ) -> CacheEntry:
-        """Stores a newly uploaded file in the cache table."""
-        entry = CacheEntry(
-            cache_key=cache_key,
-            source_id=source_id,
-            title=title,
-            operation=operation,
-            codec=codec,
-            resolution=resolution,
-            height=height,
-            subtitle_lang=subtitle_lang,
-            file_size=file_size,
-            telegram_channel_id=telegram_channel_id,
-            telegram_message_id=telegram_message_id,
-            hit_count=1,
-            is_valid=True,
-            created_at=datetime.now(timezone.utc),
-            last_used_at=datetime.now(timezone.utc),
-        )
-        session.add(entry)
+        """Stores or updates a newly uploaded file in the cache table."""
+        stmt = select(CacheEntry).where(CacheEntry.cache_key == cache_key)
+        res = await session.execute(stmt)
+        entry = res.scalar_one_or_none()
+
+        now = datetime.now(timezone.utc)
+        if entry is not None:
+            entry.source_id = source_id
+            entry.title = title
+            entry.operation = operation
+            entry.codec = codec
+            entry.resolution = resolution
+            entry.height = height
+            entry.subtitle_lang = subtitle_lang
+            entry.file_size = file_size
+            entry.telegram_channel_id = telegram_channel_id
+            entry.telegram_message_id = telegram_message_id
+            entry.hit_count = 1
+            entry.is_valid = True
+            entry.last_used_at = now
+        else:
+            entry = CacheEntry(
+                cache_key=cache_key,
+                source_id=source_id,
+                title=title,
+                operation=operation,
+                codec=codec,
+                resolution=resolution,
+                height=height,
+                subtitle_lang=subtitle_lang,
+                file_size=file_size,
+                telegram_channel_id=telegram_channel_id,
+                telegram_message_id=telegram_message_id,
+                hit_count=1,
+                is_valid=True,
+                created_at=now,
+                last_used_at=now,
+            )
+            session.add(entry)
+
         await session.commit()
         await session.refresh(entry)
         return entry
+
