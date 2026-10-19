@@ -473,6 +473,62 @@ class TestClipPrecisionAndProgress:
                 )
 
     @pytest.mark.asyncio
+    async def test_clip_chat_bubble_thumbnail_generation(self, tmp_path):
+        """
+        Verifies that for clips, a compliant 320px chat bubble thumbnail is extracted
+        from the clip and prepared so the Telegram message bubble renders a crisp preview
+        instead of a flat grey box.
+        """
+        import subprocess
+        from src.services.thumbnail_service import ThumbnailService
+        from PIL import Image
+
+        clip_file = str(tmp_path / "clip.mp4")
+        raw_frame = str(tmp_path / "clip_frame.png")
+        thumb_out = str(tmp_path / "thumbnail.jpg")
+
+        # Generate a 2-second test clip
+        cmd_gen = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-t", "2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            clip_file
+        ]
+        proc = subprocess.run(cmd_gen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.returncode == 0
+
+        # Extract frame
+        ok_frame = await ThumbnailService.extract_frame_fallback(
+            video_path=clip_file,
+            output_thumb_path=raw_frame,
+            duration=2,
+            is_vertical=False,
+            target_ratio=16/9.0,
+        )
+        assert ok_frame is True
+        assert os.path.exists(raw_frame)
+
+        # Create Telegram chat thumbnail
+        ok_thumb = ThumbnailService.create_telegram_chat_thumbnail(
+            source_image_path=raw_frame,
+            output_thumb_path=thumb_out,
+            is_vertical=False,
+            target_ratio=16/9.0,
+        )
+        assert ok_thumb is True
+        assert os.path.exists(thumb_out)
+
+        # Validate Telegram compliance: <= 320px, <= 200 KB, valid JPEG
+        with Image.open(thumb_out) as img:
+            assert img.format == "JPEG"
+            assert max(img.width, img.height) <= 320
+            assert img.width == 320
+            assert img.height == 180  # 16:9 ratio
+        assert os.path.getsize(thumb_out) < 200 * 1024
+
+
+    @pytest.mark.asyncio
     async def test_unified_progress_notifier(self):
         from src.worker.notifier import StatusNotifier
         bot_mock = AsyncMock()

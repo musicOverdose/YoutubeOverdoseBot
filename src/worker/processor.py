@@ -633,13 +633,58 @@ class JobProcessor:
                         "height": height,
                     }
 
-                    # 3. For full videos, generate high-fidelity JPEG thumbnail for Telegram chat bubble.
-                    # For clips, omit custom thumbnail so users receive pure trimmed stream with 0 extra frames.
-                    if not is_clip:
-                        thumb_path = os.path.join(job_dir, "thumbnail.jpg")
-                        thumb_ok = False
-                        target_ratio = (width / float(height)) if (width > 0 and height > 0) else None
+                    # 3. Generate high-fidelity JPEG thumbnail for Telegram chat bubble.
+                    # Passing 'thumbnail' in send_video ensures the message bubble renders an instant,
+                    # crisp preview instead of a flat grey placeholder on Android, iOS, and Desktop.
+                    # This is purely metadata for Telegram's chat UI; it does NOT alter the video stream or file.
+                    thumb_path = os.path.join(job_dir, "thumbnail.jpg")
+                    thumb_ok = False
+                    target_ratio = (width / float(height)) if (width > 0 and height > 0) else None
 
+                    if is_clip:
+                        # For trimmed clips, extract a representative frame directly from the cut clip
+                        # so the chat preview accurately reflects the clip content.
+                        raw_frame_path = os.path.join(job_dir, "clip_frame.png")
+                        try:
+                            frame_ok = await ThumbnailService.extract_frame_fallback(
+                                video_path=output_file,
+                                output_thumb_path=raw_frame_path,
+                                duration=duration,
+                                is_vertical=is_vertical,
+                                target_ratio=target_ratio,
+                            )
+                            if frame_ok and os.path.exists(raw_frame_path) and os.path.getsize(raw_frame_path) > 0:
+                                thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
+                                    source_image_path=raw_frame_path,
+                                    output_thumb_path=thumb_path,
+                                    is_vertical=is_vertical,
+                                    target_ratio=target_ratio,
+                                )
+                        except Exception as clip_thumb_err:
+                            logger.warning("Clip thumbnail extraction error: %s", clip_thumb_err)
+                            thumb_ok = False
+
+                        # Direct frame 0 extraction fallback if extract_frame_fallback failed
+                        if not thumb_ok:
+                            try:
+                                cmd_f0 = [
+                                    "ffmpeg", "-y", "-v", "error",
+                                    "-ss", "0.0", "-i", output_file,
+                                    "-vframes", "1", raw_frame_path
+                                ]
+                                proc = await asyncio.create_subprocess_exec(*cmd_f0)
+                                await proc.communicate()
+                                if os.path.exists(raw_frame_path) and os.path.getsize(raw_frame_path) > 0:
+                                    thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
+                                        source_image_path=raw_frame_path,
+                                        output_thumb_path=thumb_path,
+                                        is_vertical=is_vertical,
+                                        target_ratio=target_ratio,
+                                    )
+                            except Exception as f0_err:
+                                logger.debug("Direct frame 0 thumbnail fallback error: %s", f0_err)
+                    else:
+                        # For full videos, prioritize official creator cover artwork if available
                         if cover_downloaded and os.path.exists(raw_cover_path) and os.path.getsize(raw_cover_path) > 0:
                             thumb_ok = ThumbnailService.create_telegram_chat_thumbnail(
                                 source_image_path=raw_cover_path,
@@ -663,8 +708,8 @@ class JobProcessor:
                                 logger.warning("Thumbnail generation error: %s", thumb_err)
                                 thumb_ok = False
 
-                        if thumb_ok and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
-                            extra_kwargs["thumbnail"] = FSInputFile(thumb_path)
+                    if thumb_ok and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+                        extra_kwargs["thumbnail"] = FSInputFile(thumb_path)
 
                     job.status = JobStatus.UPLOADING.value
                     await session.commit()
