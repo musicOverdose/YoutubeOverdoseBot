@@ -407,11 +407,12 @@ class JobProcessor:
 
                     clip_offset = None
                     clip_duration = None
+                    dl_start = 0.0
                     if is_clip:
-                        # 5-second cushion to capture the preceding keyframe, eliminating blurry start on iOS
-                        cushion_sec = 5.0 if (job.clip_start and job.clip_start > 0) else 0.0
-                        dl_start = max(0.0, float(job.clip_start or 0) - cushion_sec)
-                        dl_end = float(job.clip_end)
+                        # Bidirectional cushion to capture decodable preceding/following keyframes
+                        cushion_before = 5.0 if (job.clip_start and job.clip_start > 0) else 0.0
+                        dl_start = max(0.0, float(job.clip_start or 0) - cushion_before)
+                        dl_end = float(job.clip_end) + 5.0
                         ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(
                             None, [(dl_start, dl_end)]
                         )
@@ -605,6 +606,9 @@ class JobProcessor:
                         is_muted=is_muted,
                         clip_offset=clip_offset,
                         clip_duration=clip_duration,
+                        clip_start=float(job.clip_start or 0) if is_clip else None,
+                        clip_end=float(job.clip_end or 0) if is_clip else None,
+                        dl_start=dl_start if is_clip else None,
                     )
                     if not process_ok or not os.path.exists(output_file):
                         raise RuntimeError("FFmpeg processing failed")

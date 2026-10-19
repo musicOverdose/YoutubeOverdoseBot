@@ -334,14 +334,15 @@ class TestKeyboards:
 
 class TestClipPrecisionAndProgress:
     @pytest.mark.asyncio
-    async def test_process_video_clip_encoding(self):
+    async def test_process_video_clip_stream_copy(self):
         from src.services.ffmpeg_service import FFmpegService
         with patch.object(FFmpegService, "probe_file", return_value={"streams": [{"codec_type": "video", "codec_name": "h264"}, {"codec_type": "audio", "codec_name": "aac"}]}), \
+             patch.object(FFmpegService, "extract_keyframe_pts", return_value=[0.4, 2.04, 5.0, 10.0, 20.0]), \
              patch.object(FFmpegService, "run_subprocess", return_value=True) as mock_run, \
              patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=1024), \
              patch("shutil.copy2") as mock_copy:
-            
+
             ok = await FFmpegService.process_video(
                 input_path="/tmp/in.mp4",
                 output_path="/tmp/out.mp4",
@@ -353,11 +354,123 @@ class TestClipPrecisionAndProgress:
             assert ok is True
             assert mock_run.called
             cmd = mock_run.call_args[0][0]
-            # Must seek by clip_offset and specify clip_duration
-            assert "-ss" in cmd and "5.0" in cmd
-            assert "-t" in cmd and "60.0" in cmd
-            # Must encode with libx264 for keyframe alignment
-            assert "libx264" in cmd
+
+            # Must seek by aligned keyframe offset and specify cut duration
+            assert "-ss" in cmd and "5.000000" in cmd
+            assert "-t" in cmd and "60.000000" in cmd
+
+            # STRICT INVARIANT: Must use stream copy (-c:v copy) - ZERO video re-encoding
+            assert "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] == "copy"
+            assert "libx264" not in cmd
+            assert "libx265" not in cmd
+            assert "-preset" not in cmd
+            assert "-crf" not in cmd
+            assert "-vf" not in cmd
+
+            # Must stream copy audio if already AAC
+            assert "-c:a" in cmd and cmd[cmd.index("-c:a") + 1] == "copy"
+
+            # Must normalize timestamps and faststart
+            assert "-avoid_negative_ts" in cmd and cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+            assert "-movflags" in cmd and "+faststart" in cmd
+
+    def test_calculate_keyframe_boundary_zero_start(self):
+        from src.services.ffmpeg_service import FFmpegService
+        keyframes = [0.0, 2.4, 4.08, 5.24, 7.92]
+        seek_off, cut_dur, dev = FFmpegService.calculate_keyframe_boundary(
+            keyframes, target_start=0.0, target_end=15.0
+        )
+        assert seek_off == 0.0
+        assert cut_dur == 15.0
+        assert dev == 0.0
+
+    def test_calculate_keyframe_boundary_within_cushion_before(self):
+        from src.services.ffmpeg_service import FFmpegService
+        # Keyframe at 4.85 is within 0.3s before target 5.0
+        keyframes = [0.4, 2.04, 4.85, 6.88, 9.28]
+        seek_off, cut_dur, dev = FFmpegService.calculate_keyframe_boundary(
+            keyframes, target_start=5.0, target_end=20.0
+        )
+        assert seek_off == 4.85
+        assert cut_dur == pytest.approx(15.15)
+        assert dev == pytest.approx(-0.15)
+        # End boundary preserved: 4.85 + 15.15 = 20.0
+        assert pytest.approx(seek_off + cut_dur) == 20.0
+
+    def test_calculate_keyframe_boundary_after_target(self):
+        from src.services.ffmpeg_service import FFmpegService
+        # No keyframe within [4.7, 5.0]; next keyframe is at 6.88
+        keyframes = [0.4, 2.04, 6.88, 9.28, 11.8]
+        seek_off, cut_dur, dev = FFmpegService.calculate_keyframe_boundary(
+            keyframes, target_start=5.0, target_end=20.0
+        )
+        assert seek_off == 6.88
+        assert cut_dur == pytest.approx(13.12)
+        assert dev == pytest.approx(1.88)
+        # End boundary preserved: 6.88 + 13.12 = 20.0
+        assert pytest.approx(seek_off + cut_dur) == 20.0
+
+    @pytest.mark.asyncio
+    async def test_process_video_clip_muted(self):
+        from src.services.ffmpeg_service import FFmpegService
+        with patch.object(FFmpegService, "probe_file", return_value={"streams": [{"codec_type": "video", "codec_name": "h264"}, {"codec_type": "audio", "codec_name": "aac"}]}), \
+             patch.object(FFmpegService, "extract_keyframe_pts", return_value=[0.0, 5.0]), \
+             patch.object(FFmpegService, "run_subprocess", return_value=True) as mock_run, \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getsize", return_value=1024), \
+             patch("shutil.copy2"):
+
+            ok = await FFmpegService.process_video(
+                input_path="/tmp/in.mp4",
+                output_path="/tmp/out.mp4",
+                target_codec="H264",
+                target_height=720,
+                is_muted=True,
+                clip_offset=0.0,
+                clip_duration=10.0,
+            )
+            assert ok is True
+            cmd = mock_run.call_args[0][0]
+            assert "-an" in cmd
+            assert "-c:a" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_process_video_clip_converts_incompatible_audio(self):
+        from src.services.ffmpeg_service import FFmpegService
+        with patch.object(FFmpegService, "probe_file", return_value={"streams": [{"codec_type": "video", "codec_name": "h264"}, {"codec_type": "audio", "codec_name": "opus"}]}), \
+             patch.object(FFmpegService, "extract_keyframe_pts", return_value=[0.0, 5.0]), \
+             patch.object(FFmpegService, "run_subprocess", return_value=True) as mock_run, \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getsize", return_value=1024), \
+             patch("shutil.copy2"):
+
+            ok = await FFmpegService.process_video(
+                input_path="/tmp/in.mp4",
+                output_path="/tmp/out.mp4",
+                target_codec="H264",
+                target_height=720,
+                is_muted=False,
+                clip_offset=0.0,
+                clip_duration=10.0,
+            )
+            assert ok is True
+            cmd = mock_run.call_args[0][0]
+            assert "-c:a" in cmd and cmd[cmd.index("-c:a") + 1] == "aac"
+            assert "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] == "copy"
+
+    @pytest.mark.asyncio
+    async def test_process_video_clip_strictly_refuses_video_transcoding(self):
+        from src.services.ffmpeg_service import FFmpegService
+        with patch.object(FFmpegService, "probe_file", return_value={"streams": [{"codec_type": "video", "codec_name": "vp9"}, {"codec_type": "audio", "codec_name": "opus"}]}):
+            with pytest.raises(RuntimeError, match="Video re-encoding is disabled"):
+                await FFmpegService.process_video(
+                    input_path="/tmp/in.webm",
+                    output_path="/tmp/out.mp4",
+                    target_codec="H264",
+                    target_height=720,
+                    clip_offset=5.0,
+                    clip_duration=10.0,
+                )
 
     @pytest.mark.asyncio
     async def test_unified_progress_notifier(self):
@@ -557,13 +670,13 @@ class TestClipPrecisionAndProgress:
         in_file = str(tmp_path / "clip_source.mp4")
         out_file = str(tmp_path / "clip_out.mp4")
 
-        # Create a synthetic 5-second video
+        # Create a synthetic 5-second video with 1-second keyframe intervals
         cmd_gen = [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
             "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
             "-t", "5",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             in_file
         ]

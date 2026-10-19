@@ -42,6 +42,100 @@ class FFmpegService:
             return {}
 
     @classmethod
+    async def extract_keyframe_pts(cls, file_path: str) -> List[float]:
+        """
+        Extracts decodable video keyframe packet timestamps using ffprobe.
+        Filters out corrupt/discardable packets ('D' flag) and negative PTS.
+        """
+        cmd = [
+            "ffprobe",
+            "-v", "quiet",
+            "-select_streams", "v:0",
+            "-show_entries", "packet=pts_time,dts_time,flags",
+            "-of", "json",
+            file_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning("ffprobe keyframe packet extraction failed for %s: %s", file_path, stderr.decode())
+            return []
+
+        try:
+            data = json.loads(stdout.decode())
+            packets = data.get("packets", [])
+            keyframes = []
+            for p in packets:
+                flags = p.get("flags", "")
+                if "K" in flags and "D" not in flags:
+                    pts = p.get("pts_time")
+                    if pts is not None:
+                        try:
+                            f_pts = float(pts)
+                            if f_pts >= 0.0:
+                                keyframes.append(f_pts)
+                        except (ValueError, TypeError):
+                            pass
+            keyframes = sorted(list(set(keyframes)))
+            return keyframes
+        except Exception as e:
+            logger.warning("Failed to parse keyframe packet data for %s: %s", file_path, e)
+            return []
+
+    @staticmethod
+    def calculate_keyframe_boundary(
+        keyframes: List[float],
+        target_start: float,
+        target_end: float,
+    ) -> Tuple[float, float, float]:
+        """
+        Deterministic keyframe-safe boundary selection.
+        1. If target_start <= 0.05s, choose the first decodable keyframe (0.0 if valid).
+        2. Prefer the latest usable keyframe no more than 0.3s before requested start.
+        3. Otherwise, choose the earliest usable keyframe at or after requested start.
+        4. Duration is calculated as max(0.5, target_end - chosen_start) to preserve requested end.
+
+        Returns: (seek_offset, actual_cut_duration, start_deviation)
+        """
+        if not keyframes:
+            actual_dur = max(0.5, target_end - target_start)
+            return target_start, actual_dur, 0.0
+
+        if target_start <= 0.05:
+            chosen_start = 0.0 if keyframes[0] <= 0.05 else keyframes[0]
+        else:
+            candidates_before = [k for k in keyframes if (target_start - 0.3) <= k <= target_start]
+            if candidates_before:
+                chosen_start = max(candidates_before)
+            else:
+                candidates_after = [k for k in keyframes if k >= target_start]
+                if candidates_after:
+                    chosen_start = min(candidates_after)
+                else:
+                    chosen_start = max(keyframes)
+
+        actual_cut_duration = max(0.5, target_end - chosen_start)
+        start_deviation = chosen_start - target_start
+        return chosen_start, actual_cut_duration, start_deviation
+
+    @classmethod
+    async def find_keyframe_safe_boundary(
+        cls,
+        input_path: str,
+        target_start: float,
+        target_end: float,
+    ) -> Tuple[float, float, float]:
+        """
+        Finds keyframe-safe boundary for input_path given target_start and target_end.
+        """
+        keyframes = await cls.extract_keyframe_pts(input_path)
+        return cls.calculate_keyframe_boundary(keyframes, target_start, target_end)
+
+    @classmethod
     def can_stream_copy(
         cls,
         probe_data: Dict,
@@ -361,18 +455,22 @@ class FFmpegService:
         is_muted: bool = False,
         clip_offset: Optional[float] = None,
         clip_duration: Optional[float] = None,
+        clip_start: Optional[float] = None,
+        clip_end: Optional[float] = None,
+        dl_start: Optional[float] = None,
     ) -> bool:
         """
         Remuxes video to exact output format (MP4 with target_codec + AAC).
-        STRICT SOURCE-CODEC-ONLY INVARIANT FOR FULL DOWNLOADS:
-        The video stream is ALWAYS stream-copied (-c:v copy) for full downloads.
-        For trimmed clips, encodes the cut segment with IDR keyframe alignment at pts=0
-        to ensure flawless playback on iOS / mobile hardware decoders without blurry start.
+        STRICT SOURCE-CODEC-ONLY INVARIANT:
+        The video stream is ALWAYS stream-copied (-c:v copy) for both full downloads and clips.
+        Video re-encoding is strictly prohibited.
+        For trimmed clips, start boundary is aligned to a decodable keyframe (no grey/corrupted frames)
+        and preserves the requested end boundary without video transcoding.
         """
         probe_data = await cls.probe_file(input_path)
         can_copy_v, can_copy_a = cls.can_stream_copy(probe_data, target_codec)
 
-        if not can_copy_v and not clip_duration:
+        if not can_copy_v:
             streams = probe_data.get("streams", [])
             v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
             actual_vcodec = v_stream.get("codec_name") if v_stream else "unknown"
@@ -412,39 +510,65 @@ class FFmpegService:
 
         try:
             cmd = ["ffmpeg", "-y"]
-            if clip_offset and clip_offset > 0:
-                cmd.extend(["-ss", str(clip_offset)])
-            cmd.extend(["-i", input_path])
-            if clip_duration and clip_duration > 0:
-                cmd.extend(["-t", str(clip_duration)])
+            in_size = os.path.getsize(input_path) if os.path.exists(input_path) else 0
 
-            if clip_duration:
-                # Keyframe-accurate encode for clips: ensures Frame 0 is an IDR keyframe at pts=0.000000
-                # Resolves blurry/distorted first few seconds on iOS and mobile hardware decoders
-                if target_codec.upper() == "H265":
-                    cmd.extend(["-c:v", "libx265", "-preset", "ultrafast", "-crf", "26", "-tag:v", "hvc1"])
+            if clip_duration and clip_duration > 0:
+                keyframes = await cls.extract_keyframe_pts(input_path)
+
+                # Determine whether intermediate file uses source timestamps or relative timestamps starting near 0
+                if keyframes and dl_start is not None and dl_start > 5.0 and keyframes[0] > (dl_start * 0.7):
+                    target_start = float(clip_start if clip_start is not None else clip_offset or 0.0)
+                    target_end = float(clip_end if clip_end is not None else target_start + clip_duration)
                 else:
-                    cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "22"])
+                    target_start = float(clip_offset or 0.0)
+                    target_end = target_start + float(clip_duration)
+
+                seek_offset, cut_dur, start_dev = cls.calculate_keyframe_boundary(
+                    keyframes, target_start, target_end
+                )
+
+                logger.info(
+                    "CLIPPING STREAM-COPY: target=[%.2f, %.2f] -> actual_cut=[seek=%.2f, dur=%.2f, dev=%+.2f] (found %d keyframes) | in_size=%d bytes",
+                    target_start, target_end, seek_offset, cut_dur, start_dev, len(keyframes), in_size
+                )
+
+                if seek_offset > 0:
+                    cmd.extend(["-ss", f"{seek_offset:.6f}"])
+                cmd.extend(["-i", input_path])
+                if cut_dur > 0:
+                    cmd.extend(["-t", f"{cut_dur:.6f}"])
             else:
-                # Full video download: 100% stream copy (zero re-encoding)
-                cmd.extend(["-c:v", "copy"])
+                cmd.extend(["-i", input_path])
+
+            # Video: ALWAYS STREAM COPY - ZERO RE-ENCODING
+            cmd.extend(["-c:v", "copy"])
+            if target_codec.upper() == "H265":
+                cmd.extend(["-tag:v", "hvc1"])
 
             if has_audio and not is_muted:
-                if can_copy_a and not clip_duration:
+                if can_copy_a:
                     logger.info("Stream-copying audio for %s (already AAC)", input_path)
                     cmd.extend(["-c:a", "copy"])
                 else:
                     logger.info("Remuxing audio to AAC for %s", input_path)
-                    cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+                    cmd.extend(["-c:a", "aac", "-b:a", "128k"])
             else:
                 cmd.append("-an")
 
-            cmd.extend(["-movflags", "+faststart", temp_remux])
+            cmd.extend(["-avoid_negative_ts", "make_zero", "-movflags", "+faststart", temp_remux])
 
             remux_ok = await cls.run_subprocess(cmd, cancellation_event)
             if not remux_ok or not os.path.exists(temp_remux) or os.path.getsize(temp_remux) == 0:
                 logger.error("Standard remuxing failed for %s", input_path)
                 return False
+
+            if clip_duration and clip_duration > 0:
+                out_size = os.path.getsize(temp_remux)
+                ratio = (out_size / max(1, in_size)) * 100 if in_size > 0 else 100.0
+                logger.info(
+                    "CLIPPING COMPLETE: out_size=%d bytes (%.1f%% of downloaded segment) | path=%s",
+                    out_size, ratio, temp_remux
+                )
 
             # 2. If thumbnail prepending is enabled and cover is available:
             if has_cover and prepend_thumbnail:
