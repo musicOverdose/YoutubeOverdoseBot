@@ -290,9 +290,10 @@ class YtDlpService:
             "source_address": "0.0.0.0",
         }
 
-        active_cookie_file = cookies_file or settings.YTDLP_COOKIES_FILE
-        if settings.YTDLP_COOKIES_ENABLED and active_cookie_file and os.path.exists(active_cookie_file):
-            opts["cookiefile"] = active_cookie_file
+        if cookies_file and os.path.exists(cookies_file):
+            opts["cookiefile"] = cookies_file
+        elif settings.YTDLP_COOKIES_ENABLED and settings.YTDLP_COOKIES_FILE and os.path.exists(settings.YTDLP_COOKIES_FILE):
+            opts["cookiefile"] = settings.YTDLP_COOKIES_FILE
 
         if settings.YTDLP_PROXY:
             opts["proxy"] = settings.YTDLP_PROXY
@@ -410,11 +411,31 @@ class YtDlpService:
         loop = asyncio.get_running_loop()
         opts = cls.get_metadata_opts(cookies_file)
 
-        def _extract() -> Dict[str, Any]:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+        def _extract(target_opts: Dict[str, Any]) -> Dict[str, Any]:
+            with yt_dlp.YoutubeDL(target_opts) as ydl:
                 return ydl.extract_info(url, download=False)
 
-        info = await loop.run_in_executor(None, _extract)
+        try:
+            info = await loop.run_in_executor(None, _extract, opts)
+        except Exception as e:
+            err_msg = str(e).lower()
+            is_cookie_err = "cookiefile" in opts and (
+                "sign in to confirm" in err_msg
+                or "cookies are no longer valid" in err_msg
+                or "use --cookies" in err_msg
+            )
+            # Only automatically fall back if cookies_file was not explicitly forced by caller (e.g. Test Cookies endpoint)
+            if is_cookie_err and not cookies_file:
+                logger.warning(
+                    "Metadata extraction failed with cookie authentication error (%s). "
+                    "Retrying without cookies as automated fallback...",
+                    e,
+                )
+                fallback_opts = dict(opts)
+                fallback_opts.pop("cookiefile", None)
+                info = await loop.run_in_executor(None, _extract, fallback_opts)
+            else:
+                raise
 
         if source_id and info:
             # Update L1 in-memory cache

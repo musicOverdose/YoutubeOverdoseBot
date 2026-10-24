@@ -171,3 +171,77 @@ def test_worker_download_with_readonly_secrets_mount(tmp_path, monkeypatch):
                 ydl.download(["https://www.youtube.com/watch?v=dQw4w9WgXcQ"])
     finally:
         os.chmod(ro_cookie_path, 0o666)
+
+
+@pytest.mark.asyncio
+async def test_extract_metadata_automated_fallback_on_cookie_error(tmp_path, monkeypatch):
+    """
+    Verify that when global cookies are enabled but fail with a 'Sign in to confirm you’re not a bot'
+    or invalid cookie error, extract_metadata automatically logs a warning and retries without
+    cookies, returning valid metadata instead of crashing.
+    """
+    from unittest.mock import MagicMock
+    import yt_dlp
+    from src.core.config import settings
+    from src.services.ytdlp_service import YtDlpService
+
+    bad_cookie_path = str(tmp_path / "expired_cookies.txt")
+    with open(bad_cookie_path, "w") as f:
+        f.write("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\tOLD\tval\n")
+
+    monkeypatch.setattr(settings, "YTDLP_COOKIES_ENABLED", True)
+    monkeypatch.setattr(settings, "YTDLP_COOKIES_FILE", bad_cookie_path)
+
+    calls = []
+
+    def fake_extract_info(url, download=False):
+        # Examine the current YoutubeDL options
+        current_opts = fake_ydl_instance.params
+        calls.append(current_opts.get("cookiefile"))
+        if current_opts.get("cookiefile"):
+            raise yt_dlp.utils.DownloadError("ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you’re not a bot. Use --cookies")
+        return {"id": "dQw4w9WgXcQ", "title": "Fallback Success"}
+
+    fake_ydl_instance = MagicMock()
+    fake_ydl_instance.extract_info.side_effect = fake_extract_info
+
+    class FakeYoutubeDL:
+        def __init__(self, params):
+            self.params = params
+            fake_ydl_instance.params = params
+        def __enter__(self):
+            return fake_ydl_instance
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    info = await YtDlpService.extract_metadata("https://www.youtube.com/watch?v=dQw4w9WgXcQ", use_cache=False)
+    assert info["title"] == "Fallback Success"
+    assert len(calls) == 2
+    assert calls[0] == bad_cookie_path  # First attempt with cookiefile
+    assert calls[1] is None             # Fallback attempt without cookiefile
+
+
+def test_explicit_cookie_file_respected_when_disabled(tmp_path, monkeypatch):
+    """
+    Verify that passing cookies_file explicitly attaches cookiefile even when
+    YTDLP_COOKIES_ENABLED is False (essential for Admin UI Test Cookies endpoint).
+    """
+    from src.core.config import settings
+    from src.services.ytdlp_service import YtDlpService
+
+    test_file = str(tmp_path / "test_cookies.txt")
+    with open(test_file, "w") as f:
+        f.write("# Netscape\n")
+
+    monkeypatch.setattr(settings, "YTDLP_COOKIES_ENABLED", False)
+
+    # When cookies_file is None and YTDLP_COOKIES_ENABLED is False -> no cookiefile
+    opts_default = YtDlpService.get_metadata_opts(cookies_file=None)
+    assert "cookiefile" not in opts_default
+
+    # When cookies_file is explicitly provided -> cookiefile is present
+    opts_explicit = YtDlpService.get_metadata_opts(cookies_file=test_file)
+    assert opts_explicit.get("cookiefile") == test_file
+
